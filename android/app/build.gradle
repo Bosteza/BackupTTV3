@@ -1,0 +1,86 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.facebook.react"
+
+/**
+ * Configuración React Native
+ */
+react {
+    autolinkLibrariesWithApp()
+}
+
+def enableProguardInReleaseBuilds = false
+def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
+
+android {
+    ndkVersion rootProject.ext.ndkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
+    compileSdk rootProject.ext.compileSdkVersion
+
+    namespace "com.tabtrack"
+    defaultConfig {
+        applicationId "com.tabtrack"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+        missingDimensionStrategy 'react-native-camera', 'general'
+        multiDexEnabled true
+    }
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            signingConfig signingConfigs.debug
+            minifyEnabled enableProguardInReleaseBuilds
+            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+        }
+    }
+
+    // <-- Agregado: forzar Java 1.8 en el compilador Java (sourceCompatibility / targetCompatibility)
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    // <-- Modificado: cambiar JVM target de Kotlin a 17 para que coincida con Java 17 en el AGP 8.8.2
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    // RN core
+    implementation("com.facebook.react:react-android")
+
+    // Hermes vs JSC
+    if (hermesEnabled.toBoolean()) {
+        implementation("com.facebook.react:hermes-android")
+    } else {
+        implementation jscFlavor
+    }
+
+    // ML Kit Barcode Scanning
+    implementation "com.google.mlkit:barcode-scanning:17.0.2"
+    implementation 'androidx.multidex:multidex:2.0.1'
+    implementation "com.google.android.gms:play-services-location:21.0.1"
+  
+    
+
+ }
+
+// Desactivar Hermes para evitar compilación JSI/CMake
+project.ext.react = [
+    enableHermes: false
+]
+
+// vectores de iconos RN
+apply from: "../../node_modules/react-native-vector-icons/fonts.gradle"
