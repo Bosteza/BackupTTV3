@@ -80,7 +80,7 @@ export default function Help({navigation}) {
 
   // ---------- CONFIGURA AQUÍ ----------
   const WHATSAPP_FULL_URL =
-    'https://api.whatsapp.com/send?phone=5214611011391&text=%C2%A1Hola!%20Quiero%20m%C3%A1s%20informaci%C3%B3n%20de%20';
+    'https://api.whatsapp.com/send?phone=525647197764&text=%C2%A1Hola!%20Quiero%20m%C3%A1s%20informaci%C3%B3n%20de%20';
   const WHATSAPP_TEXT_FALLBACK = 'Hola, necesito ayuda.';
   const SUPPORT_EMAIL = 'tabtracksupport@gmail.com';
   // ------------------------------------

@@ -1,4 +1,6 @@
 import React, {useEffect, useMemo, useState, useRef} from 'react';
+import {useNotifications} from './NotificationProvider';
+
 import {
   SafeAreaView,
   View,
@@ -14,6 +16,7 @@ import {
   ActivityIndicator,
   useWindowDimensions,
   PixelRatio,
+  Modal,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -34,7 +37,7 @@ const formatMoney = n =>
 
 const API_HOST_CONST = 'https://api.tab-track.com';
 const API_TOKEN_CONST =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2NzM4MjQyNiwianRpIjoiODQyODVmZmUtZDVjYi00OGUxLTk1MDItMmY3NWY2NDI2NmE1IiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NjczODI0MjYsImV4cCI6MTc2OTk3NDQyNiwicm9sIjoiRWRpdG9yIn0.tx84js9-CPGmjLKVPtPeVhVMsQiRtCeNcfw4J4Q2hyc';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
 
 const AS_KEYS = {
   USER_EMAIL: 'user_email',
@@ -156,6 +159,7 @@ const mergePaidIdsLocal = async (saleId, ids = []) => {
 };
 
 export default function PaymentScreen() {
+  const {refresh} = useNotifications();
   const navigation = useNavigation();
   const route = useRoute();
   const params = route?.params ?? {};
@@ -164,7 +168,6 @@ export default function PaymentScreen() {
     console.log('PaymentScreen route.params:', params);
   }, [params]);
 
-  // responsive helpers using window dims & pixel ratio
   const {width, height} = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const topSafe = Math.round(
@@ -179,10 +182,9 @@ export default function PaymentScreen() {
 
   const wp = p => Math.round((p / 100) * width);
   const hp = p => Math.round((p / 100) * height);
-  const rf = p => Math.round(PixelRatio.roundToNearestPixel((p * width) / 375)); // base 375
+  const rf = p => Math.round(PixelRatio.roundToNearestPixel((p * width) / 375));
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-  // items parse
   let rawItems = [];
   if (Array.isArray(params.items)) rawItems = params.items;
   else if (typeof params.itemsJson === 'string') {
@@ -332,6 +334,15 @@ export default function PaymentScreen() {
   const [gatewayModalVisible, setGatewayModalVisible] = useState(false);
   const [gatewayModalMessage, setGatewayModalMessage] = useState('');
 
+  const [cardSelectModalVisible, setCardSelectModalVisible] = useState(false);
+  const [cardSelectForGateway, setCardSelectForGateway] = useState(null);
+  const [cardMethodsMap, setCardMethodsMap] = useState({
+    creditId: null,
+    debitId: null,
+    raw: [],
+  });
+  const [selectedCardType, setSelectedCardType] = useState(null);
+
   const pollingRef = useRef({
     running: false,
     stopRequested: false,
@@ -414,6 +425,72 @@ export default function PaymentScreen() {
     }
   };
 
+  const fetchStripeCredentials = async (restId, sucId) => {
+    try {
+      if (!restId || !sucId) return null;
+      const hostBase = (apiHost || API_HOST_CONST).replace(/\/$/, '');
+      const url = `${hostBase}/api/restaurantes/${encodeURIComponent(
+        restId,
+      )}/sucursales/${encodeURIComponent(sucId)}/payment-gateways`;
+      console.log('fetchStripeCredentials ->', url);
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...(apiToken ? {Authorization: `Bearer ${apiToken}`} : {}),
+        },
+      });
+      if (!res.ok) {
+        console.warn('fetchStripeCredentials -> http status', res.status);
+        return null;
+      }
+      const json = await res.json();
+      const arr = Array.isArray(json)
+        ? json
+        : Array.isArray(json.gateways)
+        ? json.gateways
+        : Array.isArray(json.available)
+        ? json.available
+        : null;
+      if (!arr || !Array.isArray(arr)) {
+        console.warn(
+          'fetchStripeCredentials -> unexpected response shape',
+          json,
+        );
+        return null;
+      }
+      const found = arr.find(
+        g =>
+          String(g.gateway ?? '').toLowerCase() === 'stripe' &&
+          (g.activo === undefined || !!g.activo),
+      );
+      if (!found) {
+        console.log(
+          'fetchStripeCredentials -> stripe gateway not found in list',
+        );
+        return null;
+      }
+      const credentials = found.credentials ?? {};
+      const pub =
+        credentials.public_key ??
+        credentials.publicKey ??
+        credentials.publishable_key ??
+        credentials.publishableKey ??
+        credentials.public ??
+        '';
+      const env = found.environment ?? found.env ?? environment ?? 'sandbox';
+      if (!pub) {
+        console.warn('fetchStripeCredentials -> missing public_key', {found});
+        return null;
+      }
+      return {public_key: pub, environment: env, raw: found};
+    } catch (err) {
+      console.warn('fetchStripeCredentials error', err);
+      return null;
+    }
+  };
+
   const openUrlRobust = async rawUrl => {
     if (!rawUrl) return false;
     const cleanRaw = String(rawUrl)
@@ -453,9 +530,10 @@ export default function PaymentScreen() {
     return false;
   };
 
-  const showGatewayUnavailableModal = gateway => {
+  const showGatewayUnavailableModal = (gateway, message) => {
     setGatewayModalMessage(
-      `Lo sentimos — el método de pago ${gateway.toUpperCase()} no está disponible para esta sucursal.`,
+      message ??
+        `Lo sentimos — el método de pago ${gateway.toUpperCase()} no está disponible para esta sucursal.`,
     );
     setGatewayModalVisible(true);
   };
@@ -525,7 +603,10 @@ export default function PaymentScreen() {
     };
   };
 
-  const startCheckoutAndPoll = async ({gateway}) => {
+  const startCheckoutAndPoll = async ({
+    gateway,
+    payment_method_id: passedPaymentMethodId = undefined,
+  }) => {
     if (loadingKey) return;
     if (loadingInit) {
       Alert.alert(
@@ -624,35 +705,37 @@ export default function PaymentScreen() {
             plataforma.includes('eposnow') ||
             plataforma.includes('epos now')
           ) {
-            resolvedPaymentMethodId = 10;
+            resolvedPaymentMethodId = 9;
           } else {
-            resolvedPaymentMethodId = 1;
+            resolvedPaymentMethodId = 3;
           }
         } else {
           console.warn(
             'startCheckoutAndPoll: no se pudo consultar restaurante (http ' +
               String(restRes.status) +
-              '). Usando default payment_method_id=1',
+              '). Usando default payment_method_id=3',
           );
-          resolvedPaymentMethodId = 1;
+          resolvedPaymentMethodId = 3;
         }
       } else {
         console.warn(
-          'startCheckoutAndPoll: restaurante_id no disponible para resolver plataforma_gestion. Usando default payment_method_id=1',
+          'startCheckoutAndPoll: restaurante_id no disponible para resolver plataforma_gestion. Usando default payment_method_id=3',
         );
-        resolvedPaymentMethodId = 1;
+        resolvedPaymentMethodId = 3;
       }
     } catch (err) {
       console.warn(
         'Error consultando plataforma_gestion del restaurante:',
         err,
-        '-> usando default payment_method_id=1',
+        '-> usando default payment_method_id=3',
       );
-      resolvedPaymentMethodId = 1;
+      resolvedPaymentMethodId = 3;
     }
 
     const payment_method_id =
-      params.payment_method_id ?? resolvedPaymentMethodId;
+      typeof passedPaymentMethodId === 'number' && passedPaymentMethodId > 0
+        ? passedPaymentMethodId
+        : params.payment_method_id ?? resolvedPaymentMethodId;
 
     const body = {
       sucursal_id: sucursal_id,
@@ -791,6 +874,7 @@ export default function PaymentScreen() {
             } catch (e) {
               console.warn('promotePendingToLocal after splits', e);
             }
+            refresh({reason: 'payment_confirmed', saleId: sale_id});
             navigation.navigate('QRMain');
             return;
           } else {
@@ -833,6 +917,7 @@ export default function PaymentScreen() {
               } catch (e) {
                 console.warn('promotePendingToLocal error (deeplink)', e);
               }
+              refresh({reason: 'payment_confirmed_deeplink', saleId: sale_id});
               navigation.navigate('QRMain');
               return;
             } else {
@@ -921,25 +1006,362 @@ export default function PaymentScreen() {
     return true;
   };
 
-  const onOptionPress = opt => {
+  const fetchCardPaymentMethods = async (restId, sucId) => {
+    try {
+      if (!restId || !sucId) return {creditId: null, debitId: null, raw: []};
+      const hostBase = (apiHost || API_HOST_CONST).replace(/\/$/, '');
+      const url = `${hostBase}/api/restaurantes/${encodeURIComponent(
+        restId,
+      )}/sucursales/${encodeURIComponent(sucId)}/metodos-pago`;
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...(apiToken ? {Authorization: `Bearer ${apiToken}`} : {}),
+        },
+      });
+      if (!res.ok) {
+        console.warn('fetchCardPaymentMethods -> http status', res.status);
+        return {creditId: null, debitId: null, raw: []};
+      }
+      const json = await res.json();
+      const arr = Array.isArray(json.data)
+        ? json.data
+        : Array.isArray(json)
+        ? json
+        : [];
+      if (!arr || !Array.isArray(arr))
+        return {creditId: null, debitId: null, raw: []};
+
+      // Palabras clave estrictas (prioritarias)
+      const strictCreditKeywords = [
+        'credito',
+        'crédito',
+        'credit',
+        'visa',
+        'mastercard',
+        'amex',
+        'american express',
+        'tarjeta crédito',
+        'tarj crédito',
+        'tarj. crédito',
+      ];
+      const strictDebitKeywords = [
+        'debito',
+        'débito',
+        'debit',
+        'deb',
+        'déb',
+        'debit card',
+        'debitcard',
+        'tarjeta débito',
+        'tarj débito',
+        'tarj. débito',
+      ];
+
+      let creditId = null;
+      let debitId = null;
+
+      // Primera pasada: buscar coincidencias específicas (más fiables)
+      for (const m of arr) {
+        const nameRaw = String(m.nombre ?? m.name ?? '').toLowerCase();
+        const candidate =
+          m.id !== undefined && m.id !== null ? m.id : m.external_id ?? null;
+
+        if (!creditId) {
+          for (const k of strictCreditKeywords) {
+            if (nameRaw.includes(k)) {
+              creditId = candidate;
+              break;
+            }
+          }
+        }
+        if (!debitId) {
+          for (const k of strictDebitKeywords) {
+            if (nameRaw.includes(k)) {
+              debitId = candidate;
+              break;
+            }
+          }
+        }
+        // si ambos ya encontrados, salimos antes
+        if (creditId && debitId) break;
+      }
+
+      // Segunda pasada (fallback): si aun falta alguno, intentar por tokens genéricos
+      if (!creditId || !debitId) {
+        for (const m of arr) {
+          const nameRaw = String(m.nombre ?? m.name ?? '').toLowerCase();
+          const candidate =
+            m.id !== undefined && m.id !== null ? m.id : m.external_id ?? null;
+
+          // solo intentar si contiene una palabra genérica (pero no asignar solo por 'tarj' sin pista)
+          if (
+            nameRaw.includes('tarj') ||
+            nameRaw.includes('tarjeta') ||
+            nameRaw.includes('card')
+          ) {
+            // si contiene pista de credito y aún no tenemos creditId
+            if (
+              !creditId &&
+              (nameRaw.includes('cred') ||
+                nameRaw.includes('credito') ||
+                nameRaw.includes('crédito') ||
+                nameRaw.includes('visa') ||
+                nameRaw.includes('mastercard') ||
+                nameRaw.includes('amex'))
+            ) {
+              creditId = candidate;
+            }
+            // si contiene pista de debito y aún no tenemos debitId
+            if (
+              !debitId &&
+              (nameRaw.includes('deb') ||
+                nameRaw.includes('debito') ||
+                nameRaw.includes('débito') ||
+                nameRaw.includes('debit'))
+            ) {
+              debitId = candidate;
+            }
+          }
+
+          if (creditId && debitId) break;
+        }
+      }
+
+      // Normalizar a número si aplica
+      if (creditId !== null) creditId = Number(creditId);
+      if (debitId !== null) debitId = Number(debitId);
+
+      return {
+        creditId: Number.isFinite(creditId) ? creditId : null,
+        debitId: Number.isFinite(debitId) ? debitId : null,
+        raw: arr,
+      };
+    } catch (err) {
+      console.warn('fetchCardPaymentMethods error', err);
+      return {creditId: null, debitId: null, raw: []};
+    }
+  };
+  const isEqualSplitOrigin =
+    params.groupPeople !== undefined && params.groupPeople !== null;
+  const itemsForGateway = isEqualSplitOrigin
+    ? [
+        {
+          codigo_item: String(1),
+          nombre_item: 'pago por partes iguales',
+          cantidad: 1,
+          precio_unitario: Number(totalSinPropinaFinal || 0),
+        },
+      ]
+    : (Array.isArray(items ? items : []) ? items : []).map(it => ({
+        codigo_item:
+          it.codigo_item ??
+          it.codigo ??
+          it.code ??
+          it.original_line_id ??
+          String(it.id ?? ''),
+        nombre_item: it.name ?? it.nombre ?? '',
+        cantidad: Number(it.qty ?? it.cantidad ?? 1) || 1,
+        precio_unitario:
+          Number(
+            it.unitPrice ?? it.price ?? it.precio_item ?? it.precio ?? 0,
+          ) || 0,
+      }));
+
+  // Acción al presionar opción — ahora abre modal de selección de tarjeta si corresponde
+  const onOptionPress = async opt => {
     if (opt.key === 'stripe') {
       if (!validateBeforeStripe()) return;
-      startCheckoutAndPoll({gateway: 'stripe'});
+
+      // obtener métodos de tarjeta dinámicos
+      try {
+        setLoadingKey('stripe');
+        const methods = await fetchCardPaymentMethods(
+          restaurante_id,
+          sucursal_id,
+        );
+        setLoadingKey(null);
+
+        if (methods.creditId || methods.debitId) {
+          // abrir modal de selección
+          setCardMethodsMap(methods);
+          setCardSelectForGateway('stripe');
+          setSelectedCardType(
+            methods.creditId ? 'credit' : methods.debitId ? 'debit' : null,
+          );
+          setCardSelectModalVisible(true);
+          return;
+        } else {
+          // no hay métodos de tarjeta configurados: mostrar mensaje y caer en flujo original (fetch creds y navegar)
+          setGatewayModalMessage(
+            'No se encontraron métodos de tarjeta configurados (crédito/débito) para esta sucursal. Se usará el método por defecto.',
+          );
+          setGatewayModalVisible(true);
+          // no return: allow original flow below to continue (fetch creds & navigate)
+        }
+      } catch (err) {
+        setLoadingKey(null);
+        console.warn('onOptionPress stripe - fetch card methods error', err);
+        Alert.alert('Error', 'No fue posible obtener métodos de tarjeta.');
+        return;
+      }
+
+      try {
+        setLoadingKey('stripe');
+        const creds = await fetchStripeCredentials(restaurante_id, sucursal_id);
+        setLoadingKey(null);
+        if (!creds || !creds.public_key) {
+          Alert.alert(
+            'Stripe no configurado',
+            'No se encontró la public_key de Stripe para esta sucursal. Verifica la configuración del restaurante.',
+          );
+          return;
+        }
+
+        navigation.navigate('Stripe', {
+          sucursal_id,
+          sale_id,
+          restaurante_id,
+          usuario_app_id: userEmail || userUsuarioAppId,
+          moneda,
+          environment,
+          displayAmount: totalWithTip || totalSinPropinaFinal,
+          monto_subtotal: totalSinPropinaFinal,
+          monto_propina: tipAmount,
+          items: itemsForGateway,
+          mesa_id,
+          userFullname,
+          userEmail,
+          stripe_public_key: creds.public_key,
+        });
+      } catch (err) {
+        setLoadingKey(null);
+        console.warn('onOptionPress stripe - fetch creds error', err);
+        Alert.alert(
+          'Error',
+          'No fue posible obtener las credenciales de Stripe.',
+        );
+      }
+
       return;
     }
     if (opt.key === 'paypal') {
       if (!validateBeforeStripe()) return;
-      startCheckoutAndPoll({gateway: 'paypal'});
-      return;
+
+      try {
+        setLoadingKey('paypal');
+        const methods = await fetchCardPaymentMethods(
+          restaurante_id,
+          sucursal_id,
+        );
+        setLoadingKey(null);
+
+        if (methods.creditId || methods.debitId) {
+          setCardMethodsMap(methods);
+          setCardSelectForGateway('paypal');
+          setSelectedCardType(
+            methods.creditId ? 'credit' : methods.debitId ? 'debit' : null,
+          );
+          setCardSelectModalVisible(true);
+          return;
+        } else {
+          showGatewayUnavailableModal(
+            'paypal',
+            'No se encontraron métodos de tarjeta configurados (crédito/débito) para esta sucursal. Se usará el método por defecto.',
+          );
+          return;
+        }
+      } catch (err) {
+        setLoadingKey(null);
+        console.warn('onOptionPress paypal - fetch card methods error', err);
+        Alert.alert('Error', 'No fue posible obtener métodos de tarjeta.');
+        return;
+      }
+    }
+    if (opt.key === 'openpay') {
+      if (!validateBeforeStripe()) return;
+
+      try {
+        setLoadingKey('openpay');
+        const methods = await fetchCardPaymentMethods(
+          restaurante_id,
+          sucursal_id,
+        );
+        setLoadingKey(null);
+
+        if (methods.creditId || methods.debitId) {
+          setCardMethodsMap(methods);
+          setCardSelectForGateway('openpay');
+          setSelectedCardType(
+            methods.creditId ? 'credit' : methods.debitId ? 'debit' : null,
+          );
+          setCardSelectModalVisible(true);
+          return;
+        } else {
+          setGatewayModalMessage(
+            'No se encontraron métodos de tarjeta configurados (crédito/débito) para esta sucursal. Se usará el método por defecto.',
+          );
+          setGatewayModalVisible(true);
+        }
+      } catch (err) {
+        setLoadingKey(null);
+        console.warn('onOptionPress openpay - fetch card methods error', err);
+        Alert.alert('Error', 'No fue posible obtener métodos de tarjeta.');
+        return;
+      }
+
+      try {
+        setLoadingKey('openpay');
+        const creds = await fetchOpenpayCredentials(
+          restaurante_id,
+          sucursal_id,
+        );
+        setLoadingKey(null);
+
+        if (!creds) {
+          Alert.alert(
+            'OpenPay no configurado',
+            'No se encontraron credenciales válidas de OpenPay para esta sucursal. Verifica la configuración del restaurante.',
+          );
+          return;
+        }
+
+        navigation.navigate('Openpay', {
+          sucursal_id,
+          sale_id,
+          restaurante_id,
+          usuario_app_id: userEmail || userUsuarioAppId,
+          moneda,
+          environment: creds.environment ?? environment,
+          monto_subtotal: totalSinPropinaFinal,
+          monto_propina: tipAmount,
+          items: itemsForGateway,
+          mesa_id,
+          openpay_merchant_id: creds.merchant_id || '',
+          openpay_public_api_key: creds.public_key || '',
+          userFullname,
+          userEmail,
+        });
+        return;
+      } catch (err) {
+        setLoadingKey(null);
+        console.warn('onOptionPress(openpay) error', err);
+        Alert.alert(
+          'Error',
+          'No se pudieron obtener las credenciales de OpenPay. Revisa la configuración.',
+        );
+        return;
+      }
     }
     Alert.alert(opt.label);
   };
 
   const paymentOptions = [
     {key: 'paypal', label: 'PayPal', icon: 'logo-paypal'},
-    {key: 'stripe', label: 'Tarjeta de credito o debito', icon: 'card-outline'},
-
-    {key: 'cash', label: 'Apple Pay', icon: 'cash-outline'},
+    {key: 'stripe', label: 'Tarjeta de crédito o débito', icon: 'card-outline'},
+    {key: 'openpay', label: 'OpenPay', icon: 'cash-outline'},
   ];
 
   const dateText = fecha_apertura
@@ -956,7 +1378,6 @@ export default function PaymentScreen() {
     [totalWithTip, totalSinPropinaFinal],
   );
 
-  // responsive computed values used inline
   const headerHeight = clamp(hp(10), 64, 112);
   const logoSize = clamp(Math.round(width * 0.28), 80, 160);
   const restaurantImageSize = clamp(Math.round(width * 0.16), 48, 120);
@@ -970,6 +1391,211 @@ export default function PaymentScreen() {
   const iconBoxSize = clamp(Math.round(width * 0.11), 40, 64);
   const titleFont = clamp(rf(2.8), 14, 20);
   const totalNumberFont = clamp(rf(6.0), 20, 40);
+
+  async function fetchOpenpayCredentials(restId, sucId) {
+    try {
+      if (!restId || !sucId) return null;
+      const hostBase = (apiHost || API_HOST_CONST).replace(/\/$/, '');
+      const url = `${hostBase}/api/restaurantes/${encodeURIComponent(
+        restId,
+      )}/sucursales/${encodeURIComponent(sucId)}/payment-gateways`;
+      console.log('fetchOpenpayCredentials ->', url);
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...(apiToken ? {Authorization: `Bearer ${apiToken}`} : {}),
+        },
+      });
+      if (!res.ok) {
+        console.warn('fetchOpenpayCredentials -> http status', res.status);
+        return null;
+      }
+      const json = await res.json();
+      const arr = Array.isArray(json)
+        ? json
+        : Array.isArray(json.gateways)
+        ? json.gateways
+        : null;
+      if (!arr || !Array.isArray(arr)) {
+        console.warn(
+          'fetchOpenpayCredentials -> unexpected response shape',
+          json,
+        );
+        return null;
+      }
+      const found = arr.find(
+        g =>
+          String(g.gateway ?? '').toLowerCase() === 'openpay' &&
+          (g.activo === undefined || !!g.activo),
+      );
+      if (!found) {
+        console.log(
+          'fetchOpenpayCredentials -> openpay gateway not found in list',
+        );
+        return null;
+      }
+      const credentials = found.credentials ?? {};
+      const merchant =
+        credentials.merchant_id ??
+        credentials.merchantId ??
+        credentials.openpay_merchant_id ??
+        credentials.merchant ??
+        '';
+      const publicKey =
+        credentials.public_key ??
+        credentials.publicKey ??
+        credentials.openpay_public_api_key ??
+        credentials.public_api_key ??
+        credentials.public ??
+        '';
+      const env =
+        found.environment ??
+        found.env ??
+        found.environment ??
+        environment ??
+        'sandbox';
+      if (!merchant || !publicKey) {
+        console.warn(
+          'fetchOpenpayCredentials -> missing merchant or publicKey',
+          {merchant, publicKey, found},
+        );
+        return null;
+      }
+      return {
+        merchant_id: merchant,
+        public_key: publicKey,
+        environment: env,
+        raw: found,
+      };
+    } catch (err) {
+      console.warn('fetchOpenpayCredentials error', err);
+      return null;
+    }
+  }
+
+  const confirmCardSelection = async () => {
+    const gateway = cardSelectForGateway;
+    const chosen = selectedCardType;
+    const creditId = cardMethodsMap.creditId;
+    const debitId = cardMethodsMap.debitId;
+    let chosenId = null;
+    if (chosen === 'credit' && Number.isFinite(creditId)) chosenId = creditId;
+    else if (chosen === 'debit' && Number.isFinite(debitId)) chosenId = debitId;
+    if (!chosenId) {
+      Alert.alert(
+        'Selección inválida',
+        'No se encontró el id del método seleccionado. Intenta nuevamente.',
+      );
+      return;
+    }
+
+    setCardSelectModalVisible(false);
+    setCardSelectForGateway(null);
+
+    if (gateway === 'stripe') {
+      if (!validateBeforeStripe()) return;
+      try {
+        setLoadingKey('stripe');
+        const creds = await fetchStripeCredentials(restaurante_id, sucursal_id);
+        setLoadingKey(null);
+        if (!creds || !creds.public_key) {
+          Alert.alert(
+            'Stripe no configurado',
+            'No se encontró la public_key de Stripe para esta sucursal. Verifica la configuración del restaurante.',
+          );
+          return;
+        }
+        navigation.navigate('Stripe', {
+          sucursal_id,
+          sale_id,
+          restaurante_id,
+          usuario_app_id: userEmail || userUsuarioAppId,
+          moneda,
+          environment,
+          displayAmount: totalWithTip || totalSinPropinaFinal,
+          monto_subtotal: totalSinPropinaFinal,
+          monto_propina: tipAmount,
+          items: itemsForGateway,
+          mesa_id,
+          userFullname,
+          userEmail,
+          stripe_public_key: creds.public_key,
+          payment_method_id: chosenId,
+        });
+      } catch (err) {
+        setLoadingKey(null);
+        console.warn('confirmCardSelection stripe - fetch creds error', err);
+        Alert.alert(
+          'Error',
+          'No fue posible obtener las credenciales de Stripe.',
+        );
+      } finally {
+        setLoadingKey(null);
+      }
+      return;
+    }
+
+    if (gateway === 'openpay') {
+      if (!validateBeforeStripe()) return;
+      try {
+        setLoadingKey('openpay');
+        const creds = await fetchOpenpayCredentials(
+          restaurante_id,
+          sucursal_id,
+        );
+        setLoadingKey(null);
+
+        if (!creds) {
+          Alert.alert(
+            'OpenPay no configurado',
+            'No se encontraron credenciales válidas de OpenPay para esta sucursal. Verifica la configuración del restaurante.',
+          );
+          return;
+        }
+
+        navigation.navigate('Openpay', {
+          sucursal_id,
+          sale_id,
+          restaurante_id,
+          usuario_app_id: userEmail || userUsuarioAppId,
+          moneda,
+          environment: creds.environment ?? environment,
+          monto_subtotal: totalSinPropinaFinal,
+          monto_propina: tipAmount,
+          items: itemsForGateway,
+          mesa_id,
+          openpay_merchant_id: creds.merchant_id || '',
+          openpay_public_api_key: creds.public_key || '',
+          userFullname,
+          userEmail,
+          payment_method_id: chosenId,
+        });
+        return;
+      } catch (err) {
+        setLoadingKey(null);
+        console.warn('confirmCardSelection openpay error', err);
+        Alert.alert(
+          'Error',
+          'No se pudieron obtener las credenciales de OpenPay. Revisa la configuración.',
+        );
+        return;
+      }
+    }
+
+    if (gateway === 'paypal') {
+      try {
+        await startCheckoutAndPoll({
+          gateway: 'paypal',
+          payment_method_id: chosenId,
+        });
+      } catch (err) {
+        console.warn('confirmCardSelection paypal error', err);
+      }
+      return;
+    }
+  };
 
   return (
     <SafeAreaView style={[styles.safe, {paddingTop: topSafe}]}>
@@ -1190,7 +1816,7 @@ export default function PaymentScreen() {
       {gatewayModalVisible && (
         <View style={styles.modalBackdrop}>
           <LinearGradient
-            colors={['#fff']}
+            colors={['#fff', '#fff']}
             style={[
               styles.gatewayModalBox,
               {width: Math.min(width - 48, 420)},
@@ -1232,6 +1858,98 @@ export default function PaymentScreen() {
           </LinearGradient>
         </View>
       )}
+
+      <Modal visible={cardSelectModalVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View
+            style={[styles.cardSelectBox, {width: Math.min(width - 48, 360)}]}>
+            <Text style={styles.cardSelectTitle}>
+              Selecciona tipo de tarjeta
+            </Text>
+            <Text style={styles.cardSelectSubtitle}>
+              Elige si pagar con tarjeta de crédito o débito
+            </Text>
+
+            <View
+              style={{
+                flexDirection: 'row',
+                marginTop: 12,
+                width: '100%',
+                justifyContent: 'space-between',
+              }}>
+              {cardMethodsMap.creditId ? (
+                <TouchableOpacity
+                  style={[
+                    styles.cardTypeBtn,
+                    selectedCardType === 'credit'
+                      ? styles.cardTypeBtnSelected
+                      : null,
+                    {flex: 1, marginRight: cardMethodsMap.debitId ? 8 : 0},
+                  ]}
+                  onPress={() => setSelectedCardType('credit')}
+                  activeOpacity={0.9}>
+                  <Text
+                    style={[
+                      styles.cardTypeBtnText,
+                      selectedCardType === 'credit'
+                        ? {fontWeight: '800'}
+                        : null,
+                    ]}>
+                    Crédito
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+
+              {cardMethodsMap.debitId ? (
+                <TouchableOpacity
+                  style={[
+                    styles.cardTypeBtn,
+                    selectedCardType === 'debit'
+                      ? styles.cardTypeBtnSelected
+                      : null,
+                    {flex: 1, marginLeft: cardMethodsMap.creditId ? 8 : 0},
+                  ]}
+                  onPress={() => setSelectedCardType('debit')}
+                  activeOpacity={0.9}>
+                  <Text
+                    style={[
+                      styles.cardTypeBtnText,
+                      selectedCardType === 'debit' ? {fontWeight: '800'} : null,
+                    ]}>
+                    Débito
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            <View
+              style={{
+                flexDirection: 'row',
+                marginTop: 18,
+                width: '100%',
+                justifyContent: 'space-between',
+              }}>
+              <TouchableOpacity
+                style={styles.cardSelectCancel}
+                onPress={() => {
+                  setCardSelectModalVisible(false);
+                  setCardSelectForGateway(null);
+                }}>
+                <Text style={styles.cardSelectCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.cardSelectConfirm,
+                  {opacity: selectedCardType ? 1 : 0.6},
+                ]}
+                onPress={confirmCardSelection}
+                disabled={!selectedCardType}>
+                <Text style={styles.cardSelectConfirmText}>Aceptar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1357,4 +2075,52 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   gatewayModalButtonText: {color: '#fff', fontWeight: '800'},
+
+  cardSelectBox: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'flex-start',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  cardSelectTitle: {fontSize: 18, fontWeight: '800', color: '#0b58ff'},
+  cardSelectSubtitle: {marginTop: 6, color: '#333'},
+  cardTypeBtn: {
+    backgroundColor: '#f3f6ff',
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardTypeBtnSelected: {
+    backgroundColor: '#e6f0ff',
+    borderWidth: 1,
+    borderColor: '#bcd9ff',
+  },
+  cardTypeBtnText: {fontSize: 16, color: '#0b1220', fontWeight: '700'},
+  cardTypeSub: {fontSize: 12, color: '#0b1220', marginTop: 6},
+  cardTypeSubSmall: {fontSize: 12, color: '#999', marginTop: 6},
+
+  cardSelectCancel: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  cardSelectCancelText: {color: '#333', fontWeight: '700'},
+  cardSelectConfirm: {
+    backgroundColor: BLUE,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+  },
+  cardSelectConfirmText: {color: '#fff', fontWeight: '700'},
+
+  safeAreaSpacer: {height: 12},
 });

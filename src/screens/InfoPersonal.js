@@ -1,4 +1,7 @@
+//FUNCIONAL
+
 import React, {useState, useEffect, useRef} from 'react';
+
 import {
   SafeAreaView,
   ScrollView,
@@ -23,12 +26,13 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ToastLib from 'react-native-root-toast';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 const BLUE = '#0046ff';
 const DOT_COLOR = '#ccc';
 const API_BASE_URL = 'https://api.tab-track.com/api/mobileapp/usuarios';
 const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2NzM4MjQyNiwianRpIjoiODQyODVmZmUtZDVjYi00OGUxLTk1MDItMmY3NWY2NDI2NmE1IiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NjczODI0MjYsImV4cCI6MTc2OTk3NDQyNiwicm9sIjoiRWRpdG9yIn0.tx84js9-CPGmjLKVPtPeVhVMsQiRtCeNcfw4J4Q2hyc';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
 
 const FOOD_TYPES_ENDPOINT =
   'https://api.tab-track.com/api/catalogos/tipos-comida';
@@ -68,6 +72,11 @@ export default function InfoPersonal({navigation}) {
   const [fieldKey, setFieldKey] = useState('');
   const [fieldLabel, setFieldLabel] = useState('');
   const [fieldValue, setFieldValue] = useState('');
+
+  const [showBirthdayPicker, setShowBirthdayPicker] = useState(false);
+  const [birthdayDate, setBirthdayDate] = useState(
+    user.cumpleanos ? new Date(user.cumpleanos) : new Date(),
+  );
 
   const [toastMsg, setToastMsg] = useState('');
   const [toastStyle, setToastStyle] = useState(styles.successToast);
@@ -231,6 +240,24 @@ export default function InfoPersonal({navigation}) {
     })();
   }, [navigation]);
 
+  const onBirthdayChange = async (event, selectedDate) => {
+    setShowBirthdayPicker(false);
+
+    if (!selectedDate) return;
+
+    // Format YYYY-MM-DD (adjust if your API needs another format)
+    const formatted = selectedDate.toISOString().split('T')[0];
+
+    const updated = {...user, cumpleanos: formatted};
+    setUser(updated);
+
+    try {
+      await AsyncStorage.setItem('user_cumpleanos', formatted);
+    } catch (e) {
+      console.warn('Error saving cumpleanos', e);
+    }
+  };
+
   // Keyboard listener: when keyboard hides finish inline edit
   useEffect(() => {
     const onHide = () => {
@@ -314,6 +341,12 @@ export default function InfoPersonal({navigation}) {
   const enterInlineEdit = key => {
     if (key === 'tipo_comida') {
       setSelectorVisible(true);
+      return;
+    }
+
+    if (key === 'cumpleanos') {
+      Keyboard.dismiss();
+      setShowBirthdayPicker(true);
       return;
     }
 
@@ -568,6 +601,8 @@ export default function InfoPersonal({navigation}) {
                         backgroundColor: '#fff',
                       },
                     ]}
+                    // NUMERIC KEYBOARD:
+                    keyboardType={key === 'telefono' ? 'phone-pad' : 'default'}
                     returnKeyType="done"
                     blurOnSubmit
                   />
@@ -760,6 +795,71 @@ export default function InfoPersonal({navigation}) {
           {toastMsg}
         </Text>
       </Animated.View>
+      {showBirthdayPicker && (
+        <Modal transparent animationType="fade">
+          <View
+            style={{
+              flex: 1,
+              justifyContent: 'center',
+              backgroundColor: 'rgba(0,0,0,0.3)',
+            }}>
+            <View
+              style={{
+                backgroundColor: '#fff',
+                marginHorizontal: 20,
+                borderRadius: 12,
+                padding: 16,
+              }}>
+              <DateTimePicker
+                value={birthdayDate}
+                mode="date"
+                display="spinner"
+                maximumDate={new Date()}
+                onChange={(event, selectedDate) => {
+                  if (selectedDate) {
+                    setBirthdayDate(selectedDate); // immediately update local state
+                  }
+                }}
+                style={{backgroundColor: '#fff'}}
+              />
+
+              <View
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'flex-end',
+                  marginTop: 12,
+                }}>
+                <Pressable
+                  onPress={() => setShowBirthdayPicker(false)}
+                  style={{padding: 10, marginRight: 12}}>
+                  <Text style={{color: '#333'}}>Cancelar</Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={async () => {
+                    const y = birthdayDate.getFullYear();
+                    const m = String(birthdayDate.getMonth() + 1).padStart(
+                      2,
+                      '0',
+                    );
+                    const d = String(birthdayDate.getDate()).padStart(2, '0');
+                    const formatted = `${y}-${m}-${d}`;
+
+                    setUser(prev => ({...prev, cumpleanos: formatted}));
+                    await AsyncStorage.setItem('user_cumpleanos', formatted);
+
+                    setShowBirthdayPicker(false);
+                  }}
+                  style={{padding: 10}}>
+                  <Text style={{color: BLUE, fontWeight: '700'}}>
+                    Confirmar
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
     </SafeAreaView>
   );
 }
@@ -938,5 +1038,53 @@ const styles = StyleSheet.create({
   selectorItemText: {
     fontSize: 15,
     color: '#222',
+  },
+  dateOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  dateContainer: {
+    width: '90%',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+
+  dateHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 14,
+    borderBottomWidth: 1,
+    borderColor: '#eee',
+  },
+
+  dateTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: BLUE,
+    fontFamily: 'Montserrat-Bold',
+  },
+
+  iosPicker: {
+    backgroundColor: '#fff',
+  },
+
+  dateConfirmButton: {
+    margin: 16,
+    backgroundColor: BLUE,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+
+  dateConfirmText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+    fontFamily: 'Montserrat-Bold',
   },
 });

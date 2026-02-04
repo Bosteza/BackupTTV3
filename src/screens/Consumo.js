@@ -19,7 +19,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 const API_BASE_URL = 'https://api.tab-track.com';
 const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2NzM4MjQyNiwianRpIjoiODQyODVmZmUtZDVjYi00OGUxLTk1MDItMmY3NWY2NDI2NmE1IiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NjczODI0MjYsImV4cCI6MTc2OTk3NDQyNiwicm9sIjoiRWRpdG9yIn0.tx84js9-CPGmjLKVPtPeVhVMsQiRtCeNcfw4J4Q2hyc';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
 const formatMoney = n =>
   Number.isFinite(n)
     ? n.toLocaleString('es-MX', {
@@ -266,7 +266,10 @@ export default function Consumo() {
     route?.params,
   ]);
 
-  const addTipLabel = tipApplied ? 'Añadir/editar propina' : 'Añadir propina';
+  const addTipLabel = tipApplied ? 'Añadir/editar propina' : 'Pagar';
+
+  const handleBack = () =>
+    navigation.canGoBack?.() ? navigation.goBack() : null;
 
   const styles = makeStyles({
     wp,
@@ -286,14 +289,21 @@ export default function Consumo() {
         translucent
         backgroundColor="transparent"
       />
+
       <View style={styles.topBar}>
         <TouchableOpacity
-          style={styles.backBtn}
-          onPress={() => navigation.goBack()}>
+          onPress={handleBack}
+          activeOpacity={0.8}
+          style={styles.backHotZone}
+          hitSlop={{top: 30, bottom: 30, left: 30, right: 30}}
+          pressRetentionOffset={{top: 40, left: 40, bottom: 40, right: 40}}
+          accessibilityRole="button"
+          accessibilityLabel="Volver">
           <Text style={styles.backArrow}>{'‹'}</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Por consumo</Text>
-        <View style={{width: Math.round(Math.max(44, wp(12)))}} />
+
+        <Text style={styles.topTitle}>Por consumo</Text>
+        <View style={styles.rightSlot} />
       </View>
 
       <ScrollView contentContainerStyle={styles.container}>
@@ -440,7 +450,7 @@ export default function Consumo() {
           )}
 
           <TouchableOpacity
-            style={styles.secondaryButton}
+            style={styles.primaryButton}
             onPress={() => {
               const payload = attachMetaDup({
                 ...payloadCommon,
@@ -449,33 +459,7 @@ export default function Consumo() {
               navigation.navigate('Propina', payload);
             }}
             activeOpacity={0.9}>
-            <Text style={styles.secondaryButtonText}>{addTipLabel}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.primaryButton}
-            onPress={() => {
-              const payload = attachMetaDup({
-                token,
-                items,
-                subtotal,
-                iva,
-                total,
-                ...(tipApplied
-                  ? {
-                      tipAmount: Number(tipApplied.tipAmount || 0),
-                      totalWithTip: Number(
-                        tipApplied.totalWithTip ||
-                          total + Number(tipApplied.tipAmount || 0),
-                      ),
-                      tipPercent: Number(tipApplied.percent || 0),
-                    }
-                  : {}),
-              });
-              navigation.navigate('Payment', payload);
-            }}
-            activeOpacity={0.9}>
-            <Text style={styles.primaryButtonText}>Proceder a pagar</Text>
+            <Text style={styles.primaryButtonText}>{addTipLabel}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -536,6 +520,8 @@ function makeStyles({wp, hp, rf, clamp, width, height, totalFont, insets}) {
   );
   const contentMaxWidth = Math.round(Math.min(width - Math.round(wp(8)), 720));
 
+  const sidePad = Math.round(Math.min(Math.max(wp(4), 12), 36)); // lateral padding con límites
+
   return StyleSheet.create({
     safe: {flex: 1, backgroundColor: '#f5f7fb', paddingTop: topSafe},
     loaderWrap: {
@@ -548,20 +534,40 @@ function makeStyles({wp, hp, rf, clamp, width, height, totalFont, insets}) {
     topBar: {
       width: '100%',
       height: Math.round(hp(9.6)),
-      paddingHorizontal: Math.round(wp(3.5)),
-      alignItems: 'center',
-      flexDirection: 'row',
-      justifyContent: 'space-between',
+      paddingHorizontal: Math.round(sidePad || wp(3.5)),
+      justifyContent: 'center',
       backgroundColor: '#fff',
       borderBottomWidth: 1,
       borderBottomColor: '#eee',
-      paddingTop: Math.round(Math.max(6, insets?.top ?? 6)),
+    },
+
+    topTitle: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      textAlign: 'center',
+      fontSize: Math.round(clamp(rf(4.2), 14, 18)),
+      fontWeight: '800',
+      color: '#0b58ff',
     },
     backBtn: {
       width: Math.round(Math.max(44, wp(12))),
       alignItems: 'flex-start',
       justifyContent: 'center',
     },
+
+    backHotZone: {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      bottom: 0,
+      width: Math.round(wp(15)),
+
+      paddingLeft: Math.round(sidePad || wp(3.5)),
+      justifyContent: 'center',
+      zIndex: 10,
+    },
+
     backArrow: {
       fontSize: Math.round(clamp(rf(7.5), 24, 40)),
       color: '#0b58ff',

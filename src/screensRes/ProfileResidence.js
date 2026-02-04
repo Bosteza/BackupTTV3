@@ -1,9 +1,4 @@
 import React, {useState, useEffect} from 'react';
-import {useNotifications} from './NotificationProvider';
-import {useFocusEffect} from '@react-navigation/native';
-import {useCallback} from 'react';
-import LinearGradient from 'react-native-linear-gradient';
-
 import {
   ScrollView,
   View,
@@ -24,7 +19,7 @@ import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Toast from 'react-native-root-toast';
 import {launchImageLibrary} from 'react-native-image-picker';
-import {CommonActions} from '@react-navigation/native';
+import LinearGradient from 'react-native-linear-gradient';
 
 const staticWidth = Dimensions.get('window').width;
 
@@ -32,32 +27,26 @@ const API_URL = 'https://api.tab-track.com';
 const TOKEN =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
 
-export default function ProfileScreen({navigation}) {
+export default function ProfileResidence({navigation}) {
   const [showNotifications, setShowNotifications] = useState(false);
-
   const [showLogoutModal, setShowLogoutModal] = useState(false);
-  const [visits, setVisits] = useState([]);
-  const {notifications, unreadCount, markAllRead} = useNotifications();
-
+  const [notifications, setNotifications] = useState([]);
   const [username, setUsername] = useState('');
-  const [profileUrl, setProfileUrl] = useState(null); // url remota de la foto de perfil (si existe)
+  const [profileUrl, setProfileUrl] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [showAvatarOptions, setShowAvatarOptions] = useState(false);
 
-  // responsive helpers
   const {width, height} = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const wp = p => Math.round((p / 100) * width);
   const hp = p => Math.round((p / 100) * height);
-  const rf = p => Math.round(PixelRatio.roundToNearestPixel((p * width) / 375)); // scale relative to 375
+  const rf = p => Math.round(PixelRatio.roundToNearestPixel((p * width) / 375));
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-  // computed responsive sizes
   const topSafe = Math.round(insets.top || StatusBar.currentHeight || 0);
   const bottomSafe = Math.round(insets.bottom || 0);
 
-  // tuned ranges to cover very small -> very large screens
   const headerHeight = clamp(hp(2), 34, 120);
   const iconSize = clamp(rf(2.6), 19, 32);
   const logoSize = clamp(Math.round(width * 0.08), 28, 48);
@@ -69,6 +58,104 @@ export default function ProfileScreen({navigation}) {
   const sectionTitleFont = clamp(rf(30), 14, 22);
   const optionFont = clamp(rf(30), 14, 20);
   const smallText = clamp(rf(20), 12, 16);
+
+  const notificationsKeyRef = React.useRef('user_notifications');
+
+  const isMarketingNotification = text => {
+    if (!text) return false;
+    return /pizz|pizzer|pizza|oferta|descuent|promocion|promo|sushi/i.test(
+      String(text),
+    );
+  };
+
+  useEffect(() => {
+    let listenerRef = null;
+    (async () => {
+      try {
+        let uid = await AsyncStorage.getItem('user_usuario_app_id');
+        const email = await AsyncStorage.getItem('user_email');
+        let storageKey = 'user_notifications';
+        if (uid && String(uid).trim())
+          storageKey = `user_notifications_${String(uid).trim()}`;
+        else if (email && String(email).trim())
+          storageKey = `user_notifications_${String(email).split('@')[0]}`;
+        notificationsKeyRef.current = storageKey;
+
+        const raw = await AsyncStorage.getItem(storageKey);
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              const filtered = parsed.filter(
+                n =>
+                  !isMarketingNotification(n?.text || n?.payload?.text || ''),
+              );
+              setNotifications(filtered);
+            } else {
+              setNotifications([]);
+            }
+          } catch (e) {
+            setNotifications([]);
+          }
+        } else {
+          setNotifications([]);
+        }
+      } catch (err) {
+        console.warn('Error cargando notificaciones desde AsyncStorage', err);
+        setNotifications([]);
+      }
+
+      listenerRef = DeviceEventEmitter.addListener(
+        'notificationReceived',
+        async notif => {
+          try {
+            let normalized = notif || {};
+            if (!normalized.id) {
+              normalized = {
+                ...normalized,
+                id: `notif_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+              };
+            }
+
+            const incomingText = String(
+              normalized.text || normalized.payload?.text || '',
+            );
+            if (isMarketingNotification(incomingText)) {
+              return;
+            }
+
+            setNotifications(prev => {
+              const next = [
+                normalized,
+                ...(Array.isArray(prev) ? prev : []),
+              ].slice(0, 200);
+              try {
+                AsyncStorage.setItem(
+                  notificationsKeyRef.current,
+                  JSON.stringify(next),
+                ).catch(() => {});
+              } catch (e) {}
+              return next;
+            });
+
+            try {
+              Toast.show(normalized.text || 'Consumo aprobado', {
+                duration: Toast.durations.SHORT,
+              });
+            } catch (e) {}
+          } catch (e) {
+            console.warn('handler notificationReceived error', e);
+          }
+        },
+      );
+    })();
+
+    return () => {
+      try {
+        listenerRef && listenerRef.remove();
+      } catch (e) {}
+    };
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -92,7 +179,6 @@ export default function ProfileScreen({navigation}) {
       }
     })();
 
-    // mostrar cache local de perfil si existe, mientras hacemos la consulta al API
     (async () => {
       try {
         const cached = await AsyncStorage.getItem('user_profile_url');
@@ -101,35 +187,71 @@ export default function ProfileScreen({navigation}) {
         /* noop */
       }
 
-      // luego reconsultamos al servidor
       await loadProfileFromApi();
     })();
   }, []);
 
-  const handleLogout = async () => {
-    const goToLogin = () => {
-      const rootNav = navigation.getParent()?.getParent(); // ProfileStack -> Tabs -> RootStack
-      const target = CommonActions.reset({
-        index: 0,
-        routes: [{name: 'Login'}],
-      });
-
-      if (rootNav) rootNav.dispatch(target);
-      else navigation.dispatch(target);
-    };
-
+  const unreadCount = notifications.filter(n => !n.read).length;
+  const markAllRead = async () => {
     try {
-      setShowLogoutModal(false);
+      const next = notifications.map(n => ({...n, read: true}));
+      setNotifications(next);
+      try {
+        await AsyncStorage.setItem(
+          notificationsKeyRef.current || 'user_notifications',
+          JSON.stringify(next),
+        );
+      } catch (e) {
+        console.warn('Error persistiendo markAllRead', e);
+      }
+    } catch (e) {
+      console.warn('markAllRead error', e);
+    }
+  };
 
-      // Clear session/auth keys (your logic)
+  const handleLogout = async () => {
+    try {
+      setShowLogoutModal && setShowLogoutModal(false);
+
       const uid = await AsyncStorage.getItem('user_usuario_app_id');
       const email = await AsyncStorage.getItem('user_email');
       const currentId = uid || email || null;
 
+      try {
+        if (email) {
+          const profileCached = await AsyncStorage.getItem('user_profile_url');
+          const raw = await AsyncStorage.getItem('recent_accounts_v1');
+          let arr = raw ? JSON.parse(raw) : [];
+          arr = Array.isArray(arr)
+            ? arr.filter(
+                a =>
+                  String(a.email).toLowerCase() !== String(email).toLowerCase(),
+              )
+            : [];
+          arr.unshift({
+            email,
+            avatarUrl: profileCached || null,
+            savedAt: Date.now(),
+          });
+          if (!Array.isArray(arr)) arr = [];
+          if (arr.length > 6) arr = arr.slice(0, 6);
+          try {
+            await AsyncStorage.setItem(
+              'recent_accounts_v1',
+              JSON.stringify(arr),
+            );
+          } catch (e) {
+            console.warn('save recent_accounts failed', e);
+          }
+        }
+      } catch (e) {
+        console.warn('Guardar recent account failed (pre-clean)', e);
+      }
+
       const preserveKeys = new Set();
+
       const visitsBase = 'user_visits';
       const pendBase = 'pending_visits';
-
       if (currentId) {
         preserveKeys.add(`${visitsBase}_${currentId}`);
         preserveKeys.add(`${pendBase}_${currentId}`);
@@ -138,8 +260,10 @@ export default function ProfileScreen({navigation}) {
       }
       preserveKeys.add(visitsBase);
       preserveKeys.add(pendBase);
+      preserveKeys.add('recent_accounts_v1');
 
       const branchesPrefix = 'branches_cache_';
+
       const allKeys = await AsyncStorage.getAllKeys();
 
       const sessionPrefixes = ['session_', 'sess_', 'tmp_'];
@@ -155,39 +279,80 @@ export default function ProfileScreen({navigation}) {
         if (preserveKeys.has(k)) return false;
         if (k.startsWith(branchesPrefix)) return false;
         if (tokenNames.includes(k)) return true;
-        return sessionPrefixes.some(p => k.startsWith(p));
+        for (const p of sessionPrefixes) {
+          if (k.startsWith(p)) return true;
+        }
+        return false;
       });
 
       if (keysToRemove.length > 0) {
         await AsyncStorage.multiRemove(keysToRemove);
       }
 
-      // Always ensure your session flag is cleared
-      await AsyncStorage.multiRemove(['session_active', 'session_login_at']);
+      try {
+        await AsyncStorage.multiRemove([
+          'user_usuario_app_id',
+          'user_email',
+          'user_valid',
+          'user_fullname',
+          'user_profile_url',
+        ]);
+      } catch (e) {
+        console.warn('Error removing persistent auth keys on logout', e);
+      }
 
+      try {
+        if (email) {
+          await AsyncStorage.removeItem(`notifications_store_${email}`).catch(
+            () => null,
+          );
+          await AsyncStorage.removeItem(`notifications_seen_${email}`).catch(
+            () => null,
+          );
+        }
+      } catch (e) {
+        console.warn('Error removing notification store on logout', e);
+      }
+
+      try {
+        navigation.reset({
+          index: 0,
+          routes: [{name: 'Recent'}],
+        });
+      } catch (e) {
+        console.warn(
+          'navigate RecentAccounts failed, falling back to Login',
+          e,
+        );
+        try {
+          navigation.reset({
+            index: 0,
+            routes: [{name: 'Login'}],
+          });
+        } catch (_) {}
+      }
       Toast.show('Sesión cerrada', {duration: Toast.durations.SHORT});
-      goToLogin();
     } catch (err) {
       console.warn('Error cerrando sesión:', err);
       Toast.show('No se pudo cerrar sesión', {duration: Toast.durations.SHORT});
-      goToLogin(); // ✅ still go to Login without crashing
+      try {
+        navigation.reset({
+          index: 0,
+          routes: [{name: 'Login'}],
+        });
+      } catch (_) {
+        /* noop */
+      }
     }
   };
 
-  /* ----------------------
-     Helpers para auth (usa TOKEN constante)
-     ---------------------- */
   const getAuthHeaders = (extra = {}) => {
     const base = {'Content-Type': 'application/json', ...extra};
     if (TOKEN && TOKEN.trim().length > 0)
       base['Authorization'] = `Bearer ${TOKEN}`;
     return base;
   };
-  /* --------------------------------------------------- */
 
-  // ---------------------------
-  // PROFILE: load from API by email, save profileUrl in state & AsyncStorage
-  // ---------------------------
   const loadProfileFromApi = async () => {
     try {
       setProfileLoading(true);
@@ -227,7 +392,7 @@ export default function ProfileScreen({navigation}) {
       } else {
         setProfileUrl(null);
         try {
-          await AsyncStorage.removeItem('user_profile_url').catch(() => {});
+          await AsyncStorage.removeItem('user_profile_url').catch(() => null);
         } catch (_) {}
         try {
           DeviceEventEmitter.emit('profileUpdated', null);
@@ -242,9 +407,6 @@ export default function ProfileScreen({navigation}) {
     }
   };
 
-  // ---------------------------
-  // UPLOAD FLOW: pick image -> presign -> PUT -> commit -> refresh profile
-  // ---------------------------
   const onSelectImage = async () => {
     try {
       const result = await launchImageLibrary({
@@ -319,7 +481,6 @@ export default function ProfileScreen({navigation}) {
       };
 
       const contentType = normalizeContentType(asset);
-
       const presignUrl = `${API_URL}/api/mobileapp/usuarios/${encodeURIComponent(
         uid,
       )}/foto/presign`;
@@ -476,7 +637,6 @@ export default function ProfileScreen({navigation}) {
     }
   };
 
-  // Helper: generate initials from username
   const getInitials = name => {
     if (!name) return null;
     const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -484,6 +644,65 @@ export default function ProfileScreen({navigation}) {
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
     return (parts[0][0] + parts[1][0]).toUpperCase();
   };
+  function NotificationRow({n}) {
+    const dateLabel =
+      n.date || n.createdAt
+        ? new Date(n.date || n.createdAt).toLocaleString('es-MX', {
+            dateStyle: 'short',
+            timeStyle: 'short',
+          })
+        : '';
+    const title = 'Consumo aprobado';
+    const amount =
+      Number(
+        n.amount ?? n.total ?? n.payload?.total ?? n.payload?.amount ?? 0,
+      ) || 0;
+
+    return (
+      <TouchableOpacity
+        activeOpacity={0.9}
+        style={[
+          styles.notificationItemLarge,
+          n.read ? styles.readCard : styles.unreadCard,
+        ]}
+        onPress={() => {
+          if (n.saleId || n.payload?.sale_id) {
+            try {
+              navigation.navigate('ConfirmacionConsumo', {
+                transactionId: n.saleId ?? n.payload?.sale_id,
+                amount: amount,
+                date: n.date || n.payload?.closed_at || n.createdAt,
+                rawResponse: n.payload || n,
+              });
+            } catch (e) {}
+          }
+        }}>
+        <View style={styles.notLeft}>
+          <Text style={styles.notBranch} numberOfLines={1}>
+            {title}
+          </Text>
+          {/*           { (n.saleId || n.payload?.sale_id) ? <Text style={styles.notSale}>Venta: {n.saleId ?? n.payload?.sale_id}</Text> : null }*/}
+          <Text style={styles.notDate}>{dateLabel}</Text>
+        </View>
+
+        <View style={[styles.notRight, {minWidth: 90}]}>
+          <Text style={styles.notAmount}>
+            {amount > 0 ? formatMoney(amount) : '—'}
+          </Text>
+          <Text style={styles.notCurrency}>{amount > 0 ? 'MXN' : ''}</Text>
+        </View>
+      </TouchableOpacity>
+    );
+  }
+
+  function formatMoney(n) {
+    return Number.isFinite(n)
+      ? n.toLocaleString('es-MX', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+      : '0.00';
+  }
 
   return (
     <SafeAreaView
@@ -491,7 +710,6 @@ export default function ProfileScreen({navigation}) {
         styles.container,
         {paddingTop: topSafe, paddingBottom: Math.max(12, bottomSafe)},
       ]}>
-      {/* Modal de notificaciones */}
       <Modal visible={showNotifications} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={[styles.modalBox, {width: modalWidth}]}>
@@ -506,12 +724,6 @@ export default function ProfileScreen({navigation}) {
                 <Ionicons name="close" size={iconSize} color="#333" />
               </TouchableOpacity>
             </View>
-            <View style={styles.modalListHeader}>
-              <Text style={styles.modalListHeaderText}>
-                Últimas notificaciones
-              </Text>
-            </View>
-
             <ScrollView
               style={[
                 styles.modalList,
@@ -527,7 +739,6 @@ export default function ProfileScreen({navigation}) {
                 </View>
               )}
             </ScrollView>
-
             <TouchableOpacity
               style={[styles.markReadButton, {margin: basePadding}]}
               onPress={markAllRead}>
@@ -543,7 +754,6 @@ export default function ProfileScreen({navigation}) {
         </View>
       </Modal>
 
-      {/* Modal de cierre de sesión */}
       <Modal visible={showLogoutModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View
@@ -600,7 +810,6 @@ export default function ProfileScreen({navigation}) {
         </View>
       </Modal>
 
-      {/* Modal opciones avatar */}
       <Modal
         visible={showAvatarOptions}
         transparent
@@ -697,11 +906,11 @@ export default function ProfileScreen({navigation}) {
                 color="#0046ff"
               />
               {unreadCount > 0 && (
-                <View style={[styles.badge, {right: -3, top: -7}]}>
+                <View style={[styles.badge, {right: 0, top: -5}]}>
                   <Text
                     style={[
                       styles.badgeText,
-                      {fontSize: clamp(rf(2.6), 15, 20)},
+                      {fontSize: clamp(rf(2.6), 10, 12)},
                     ]}>
                     {unreadCount}
                   </Text>
@@ -716,7 +925,6 @@ export default function ProfileScreen({navigation}) {
         />
 
         <View style={[styles.profileSection, {paddingHorizontal: basePadding}]}>
-          {/* Avatar container */}
           <View
             style={{
               width: avatarSize,
@@ -761,7 +969,6 @@ export default function ProfileScreen({navigation}) {
               )}
             </View>
 
-            {/* pencil icon overlay */}
             <TouchableOpacity
               onPress={() => setShowAvatarOptions(true)}
               style={[
@@ -829,15 +1036,9 @@ export default function ProfileScreen({navigation}) {
             optionFont={optionFont}
           />
           <Option
-            icon="document-text-outline"
-            label="Facturación"
-            onPress={() => navigation.navigate('Facturacion')}
-            optionFont={optionFont}
-          />
-          <Option
             icon="lock-closed-outline"
             label="Politicas de seguridad"
-            onPress={() => navigation.navigate('Security')}
+            onPress={() => navigation.navigate('SecurityResidence')}
             optionFont={optionFont}
           />
           <Option
@@ -875,12 +1076,14 @@ export default function ProfileScreen({navigation}) {
             Consulta términos y condiciones
           </Text>
         </TouchableOpacity>
+
         <TouchableOpacity
           style={[
             styles.termsButton,
             {
               position: 'relative',
               overflow: 'hidden',
+
               marginTop: Math.max(12, hp(1.7)),
               paddingHorizontal: clamp(Math.round(width * 0.06), 12, 34),
               paddingVertical: clamp(10, 8, 14),
@@ -889,30 +1092,7 @@ export default function ProfileScreen({navigation}) {
               justifyContent: 'center',
             },
           ]}
-          onPress={async () => {
-            try {
-              const val = await AsyncStorage.getItem('user_residence_activo');
-              if (String(val) === 'true') {
-                try {
-                  navigation.navigate('HomeResidence');
-                  return;
-                } catch (e) {
-                  console.warn('navigate HomeResidence failed', e);
-                  navigation.navigate('CodeResidence');
-                  return;
-                }
-              } else {
-                navigation.navigate('CodeResidence');
-                return;
-              }
-            } catch (err) {
-              console.warn(
-                'Error reading user_residence_activo from AsyncStorage',
-                err,
-              );
-              navigation.navigate('CodeResidence');
-            }
-          }}
+          onPress={() => navigation.navigate('Home')}
           hitSlop={{top: 8, left: 8, right: 8, bottom: 8}}>
           <LinearGradient
             colors={['#9F4CFF', '#6A43FF', '#2C7DFF']}
@@ -931,45 +1111,11 @@ export default function ProfileScreen({navigation}) {
             }}
           />
           <Text style={[styles.termsText, {fontSize: clamp(rf(3.6), 13, 16)}]}>
-            Tabtrack Residence
+            Tabtrack
           </Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
-  );
-}
-
-function NotificationRow({n}) {
-  const dateLabel = n.date
-    ? new Date(n.date).toLocaleString('es-MX', {
-        dateStyle: 'short',
-        timeStyle: 'short',
-      })
-    : '';
-
-  return (
-    <View
-      style={[
-        styles.notificationItemLarge,
-        n.read ? styles.readCard : styles.unreadCard,
-      ]}>
-      <View style={styles.notLeft}>
-        <Text style={styles.notBranch} numberOfLines={1}>
-          {n.branch || `Venta ${n.saleId ?? ''}`}
-        </Text>
-        <Text style={styles.notDate}>{dateLabel}</Text>
-      </View>
-
-      <View style={styles.notRight}>
-        <Text style={styles.notAmount}>
-          {Number(n.amount || 0).toLocaleString('es-MX', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })}
-        </Text>
-        <Text style={styles.notCurrency}>MXN</Text>
-      </View>
-    </View>
   );
 }
 
@@ -1014,10 +1160,12 @@ const styles = StyleSheet.create({
   logoFull: {width: 32, height: 32, marginRight: 8, resizeMode: 'contain'},
   badge: {
     position: 'absolute',
+    top: 2,
+    right: 2,
     backgroundColor: '#ff3b30',
-    borderRadius: 9,
-    paddingHorizontal: 5,
-    paddingVertical: 0,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
   },
   badgeText: {color: '#fff', fontSize: 10},
   modalOverlay: {
@@ -1037,14 +1185,37 @@ const styles = StyleSheet.create({
   },
   modalTitle: {fontWeight: '600', color: '#333'},
   modalList: {paddingHorizontal: 16},
-  notificationItem: {
+  notificationItemLarge: {
+    flexDirection: 'row',
     paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderColor: '#f0f0f0',
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#eef3ff',
+    backgroundColor: '#fff',
   },
-  notificationText: {color: '#333'},
-  unread: {backgroundColor: '#eef5ff'},
-  read: {backgroundColor: '#fff'},
+  unreadCard: {backgroundColor: '#f2f8ff', borderColor: '#d7e8ff'},
+  readCard: {backgroundColor: '#ffffff', borderColor: '#f0f0f0'},
+
+  notLeft: {flex: 1, paddingRight: 8},
+  notRight: {alignItems: 'flex-end', justifyContent: 'center', minWidth: 80},
+
+  notBranch: {fontWeight: '800', fontSize: 14, color: '#111', marginBottom: 2},
+  notSale: {color: '#666', fontSize: 12, marginBottom: 2},
+  notDate: {color: '#888', fontSize: 11},
+
+  notAmount: {fontWeight: '900', fontSize: 16, color: '#0b58ff'},
+  notCurrency: {color: '#666', fontSize: 11},
+
+  noNotifications: {
+    padding: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noNotificationsText: {color: '#666'},
   markReadButton: {
     padding: 12,
     backgroundColor: '#0046ff',
@@ -1102,7 +1273,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   avatarInitials: {color: '#0046ff', fontWeight: '700'},
-  // edit avatar button (pencil)
   editAvatarBtn: {
     position: 'absolute',
     backgroundColor: '#6C5CE7',
@@ -1153,7 +1323,6 @@ const styles = StyleSheet.create({
   },
   termsText: {color: '#fff', fontWeight: '600'},
 
-  // avatar modal styles
   avatarModal: {
     backgroundColor: '#fff',
     borderRadius: 12,
@@ -1202,161 +1371,4 @@ const styles = StyleSheet.create({
   },
   toastText: {color: '#fff', flex: 1, marginRight: 12},
   toastLink: {color: '#4EA1FF', fontWeight: '700', marginLeft: 8},
-  modalListHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderColor: '#eee',
-  },
-
-  modalListHeaderText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#333',
-  },
-
-  markAllText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0046ff',
-  },
-  notificationCard: {
-    padding: 14,
-    marginVertical: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#e6e6e6',
-  },
-
-  notificationUnread: {
-    backgroundColor: '#eef5ff',
-  },
-
-  notificationRead: {
-    backgroundColor: '#fff',
-  },
-
-  notificationCardText: {
-    fontSize: 14,
-    color: '#333',
-  },
-
-  notificationItemLarge: {
-    flexDirection: 'row',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginVertical: 8,
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: '#eef3ff',
-    backgroundColor: '#fff',
-  },
-
-  unreadCard: {
-    backgroundColor: '#f2f8ff',
-    borderColor: '#d7e8ff',
-  },
-
-  readCard: {
-    backgroundColor: '#ffffff',
-    borderColor: '#f0f0f0',
-  },
-
-  notLeft: {
-    flex: 1,
-    paddingRight: 8,
-  },
-
-  notRight: {
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-  },
-
-  notBranch: {
-    fontWeight: '800',
-    fontSize: 14,
-    color: '#111',
-    marginBottom: 2,
-  },
-
-  notSale: {
-    color: '#666',
-    fontSize: 12,
-    marginBottom: 2,
-  },
-
-  notDate: {
-    color: '#888',
-    fontSize: 11,
-  },
-
-  notAmount: {
-    fontWeight: '900',
-    fontSize: 16,
-    color: '#0b58ff',
-  },
-
-  notCurrency: {
-    color: '#666',
-    fontSize: 11,
-  },
-  markReadButton: {
-    padding: 12,
-    backgroundColor: '#0046ff',
-    alignItems: 'center',
-    margin: 16,
-    borderRadius: 8,
-  },
-  markReadText: {color: '#fff', fontWeight: '600'},
-  dateOverlay: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-
-  dateSheet: {
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 16,
-    width: '90%',
-    maxWidth: 360,
-    alignItems: 'center',
-  },
-
-  datePicker: {
-    width: '100%',
-  },
-
-  dateActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 12,
-    width: '100%',
-  },
-
-  dateBtnSecondary: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-  },
-
-  dateBtnSecondaryText: {
-    color: '#666',
-    fontWeight: '600',
-  },
-
-  dateBtnPrimary: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-  },
-
-  dateBtnPrimaryText: {
-    color: '#0046ff',
-    fontWeight: '700',
-  },
 });

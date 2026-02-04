@@ -19,10 +19,11 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import LinearGradient from 'react-native-linear-gradient';
 
 const API_BASE_URL = 'https://api.tab-track.com';
 const API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2NzM4MjQyNiwianRpIjoiODQyODVmZmUtZDVjYi00OGUxLTk1MDItMmY3NWY2NDI2NmE1IiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NjczODI0MjYsImV4cCI6MTc2OTk3NDQyNiwicm9sIjoiRWRpdG9yIn0.tx84js9-CPGmjLKVPtPeVhVMsQiRtCeNcfw4J4Q2hyc';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
 
 export default function OpinionScreen({navigation, route}) {
   const {width, height} = useWindowDimensions();
@@ -49,10 +50,10 @@ export default function OpinionScreen({navigation, route}) {
     SLIDE_HEIGHT,
   });
 
-  const [alreadyReviewed, setAlreadyReviewed] = useState(false);
-
   const [showNotifications, setShowNotifications] = useState(false);
-  const {notifications, dispatch} = useNotifications();
+  const [alreadySent, setAlreadySent] = useState(false);
+
+  const {notifications, unreadCount, markAllRead} = useNotifications();
   const [surveys, setSurveys] = useState([]);
   const [loadingSurveys, setLoadingSurveys] = useState(false);
   const [sending, setSending] = useState(false);
@@ -77,6 +78,9 @@ export default function OpinionScreen({navigation, route}) {
   const bannerFromVisit = visit?.bannerImage ?? visit?.banner ?? null;
   const restaurantLogoFromVisit =
     visit?.restaurantImage ?? visit?.restaurantImageUri ?? visit?.logo ?? null;
+  const modalWidth = Math.min(width * 0.92, 720);
+  const iconSize = styles.iconSize;
+  const basePadding = styles.basePadding;
 
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
@@ -103,16 +107,6 @@ export default function OpinionScreen({navigation, route}) {
       }
     };
   }, []);
-
-  useEffect(() => {
-    if (alreadyReviewed) {
-      navigation.reset({
-        index: 0,
-        routes: [{name: 'Rating', params: {visit}}],
-      });
-    }
-  }, [alreadyReviewed, navigation, visit]);
-
   // ----------------------------------------------------------------
 
   // Cargar encuestas activas para la sucursal/restaurante
@@ -247,6 +241,7 @@ export default function OpinionScreen({navigation, route}) {
                   const keys = Object.keys(repJson);
                   for (const k of keys) {
                     if (Array.isArray(repJson[k]) && repJson[k].length > 0) {
+                      setAlreadySent(true);
                       // si el array contiene objetos con 'pregunta_id' o 'respuestas', lo usamos
                       const sample = repJson[k][0];
                       if (
@@ -284,11 +279,9 @@ export default function OpinionScreen({navigation, route}) {
                 }
 
                 if (!Array.isArray(reps) || reps.length === 0) {
+                  // no hay respuestas previas para esta encuesta
                   continue;
                 }
-
-                // 🚨 VISIT ALREADY REVIEWED
-                setAlreadyReviewed(true);
 
                 // reps puede ser un array de objetos que representan respuestas individuales
                 // Cada item puede tener: pregunta_id, valor_int, valor_text, valor, respuesta, etc.
@@ -397,11 +390,6 @@ export default function OpinionScreen({navigation, route}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restauranteId, sucursalId]);
 
-  const unreadCount = notifications.filter(n => !n.read).length;
-  const markAllRead = () => {
-    dispatch({type: 'MARK_ALL_READ'});
-  };
-
   // manejar selección de estrellas
   const setStarForQuestion = (preguntaId, value) => {
     setRatingsMap(prev => ({...prev, [preguntaId]: value}));
@@ -415,6 +403,8 @@ export default function OpinionScreen({navigation, route}) {
   const handleSend = async () => {
     if (!surveys || surveys.length === 0) {
       showToast('No hay encuestas para enviar.');
+      setAlreadySent(true);
+
       return;
     }
 
@@ -540,34 +530,56 @@ export default function OpinionScreen({navigation, route}) {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
+      {/* Modal de notificaciones */}
       <Modal visible={showNotifications} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
+          <View style={[styles.modalBox, {width: modalWidth}]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Notificaciones</Text>
-              <TouchableOpacity onPress={() => setShowNotifications(false)}>
-                <Ionicons name="close" size={styles.iconSize} color="#333" />
+              <Text
+                style={[styles.modalTitle, {fontSize: clamp(rf(3.8), 16, 20)}]}>
+                Notificaciones
+              </Text>
+              <TouchableOpacity
+                onPress={() => setShowNotifications(false)}
+                hitSlop={{top: 8, left: 8, right: 8, bottom: 8}}>
+                <Ionicons name="close" size={iconSize} color="#333" />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.modalList}>
-              {notifications.map(n => (
-                <View
-                  key={n.id}
-                  style={[
-                    styles.notificationItem,
-                    n.read ? styles.read : styles.unread,
-                  ]}>
-                  <Text style={styles.notificationText}>{n.text}</Text>
-                </View>
-              ))}
-            </ScrollView>
-            <View style={styles.modalBtnWrap}>
-              <Button
-                title="Marcar todo como leído"
-                onPress={markAllRead}
-                color={'#0046ff'}
-              />
+            <View style={styles.modalListHeader}>
+              <Text style={styles.modalListHeaderText}>
+                Últimas notificaciones
+              </Text>
             </View>
+
+            <ScrollView
+              style={[
+                styles.modalList,
+                {maxHeight: Math.round(Math.min(hp(60), 420))},
+              ]}>
+              {notifications && notifications.length > 0 ? (
+                notifications.map(n => (
+                  <NotificationRow key={n.id} n={n} styles={styles} />
+                ))
+              ) : (
+                <View style={styles.noNotifications}>
+                  <Text style={styles.noNotificationsText}>
+                    No hay notificaciones nuevas.
+                  </Text>
+                </View>
+              )}
+            </ScrollView>
+
+            <TouchableOpacity
+              style={[styles.markReadButton, {margin: basePadding}]}
+              onPress={markAllRead}>
+              <Text
+                style={[
+                  styles.markReadText,
+                  {fontSize: clamp(rf(3.6), 13, 16)},
+                ]}>
+                Marcar todo como leído
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -593,16 +605,18 @@ export default function OpinionScreen({navigation, route}) {
           /> */}
           <TouchableOpacity
             onPress={() => setShowNotifications(true)}
-            style={styles.notificationButton}
-            accessibilityRole="button">
-            <Ionicons
-              name="notifications-outline"
-              size={styles.iconSize}
-              color={styles.headerTitle.color}
-            />
+            style={styles.headerButton}
+            hitSlop={{top: 8, left: 8, right: 8, bottom: 8}}>
+            <Ionicons name="notifications-outline" size={30} color="#0046ff" />
             {unreadCount > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{unreadCount}</Text>
+              <View style={[styles.badge, {right: 6, top: 1}]}>
+                <Text
+                  style={[
+                    styles.badgeText,
+                    {fontSize: clamp(rf(2.6), 15, 20)},
+                  ]}>
+                  {unreadCount}
+                </Text>
               </View>
             )}
           </TouchableOpacity>
@@ -610,8 +624,8 @@ export default function OpinionScreen({navigation, route}) {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.sectionHeading}>Detalle</Text>
-
+        {/*         <Text style={styles.sectionHeading}>Detalle</Text>
+         */}
         <View style={styles.topSection}>
           <View style={styles.logoColumn}>
             <View style={styles.avatarWrapper}>
@@ -660,7 +674,7 @@ export default function OpinionScreen({navigation, route}) {
 
         <View style={styles.rightColumn}>
           <Text style={styles.instruction}>
-            Por favor, Califica tu experiencia en{' '}
+            Por favor, califica tu experiencia en{' '}
             <Text style={styles.bold}>
               {visit?.restaurantName ?? visit?.restaurant ?? 'el restaurante'}
             </Text>{' '}
@@ -720,7 +734,11 @@ export default function OpinionScreen({navigation, route}) {
                               return (
                                 <TouchableOpacity
                                   key={s}
-                                  onPress={() => setStarForQuestion(pid, s)}
+                                  onPress={() => {
+                                    if (!alreadySent)
+                                      setStarForQuestion(pid, s);
+                                  }}
+                                  disabled={alreadySent}
                                   accessibilityRole="button">
                                   <Ionicons
                                     name={filled ? 'star' : 'star-outline'}
@@ -740,7 +758,11 @@ export default function OpinionScreen({navigation, route}) {
                             placeholder="Escribe tu respuesta..."
                             placeholderTextColor="#999"
                             value={textsMap[pid] ?? ''}
-                            onChangeText={t => setTextForQuestion(pid, t)}
+                            editable={!alreadySent}
+                            selectTextOnFocus={!alreadySent}
+                            onChangeText={t => {
+                              if (!alreadySent) setTextForQuestion(pid, t);
+                            }}
                           />
                         )}
                       </View>
@@ -749,20 +771,44 @@ export default function OpinionScreen({navigation, route}) {
                 </View>
               ))}
 
-              <View style={{marginTop: 8}} />
-
-              <View style={styles.buttonRow}>
-                <TouchableOpacity
-                  style={[styles.btnPrimary, {opacity: sending ? 0.7 : 1}]}
-                  onPress={handleSend}
-                  disabled={sending}>
-                  {sending ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.btnText}>Enviar</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
+              <View style={{marginTop: 0}} />
+              {alreadySent ? (
+                <View style={styles.sentButtonWrapper}>
+                  <View style={styles.sentButtonInner}>
+                    <LinearGradient
+                      colors={['#9F4CFF', '#6A43FF', '#2C7DFF']}
+                      start={{x: 0, y: 0}}
+                      end={{x: 1, y: 0}}
+                      style={styles.sentGradientBg}
+                    />
+                    <Text
+                      allowFontScaling={false}
+                      style={[
+                        styles.sentButtonText,
+                        {
+                          fontSize: 17,
+                          lineHeight: Math.round(30 * 1.2),
+                        },
+                      ]}>
+                      Tu respuesta se ha enviado, ¡muchas gracias!
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.buttonRow}>
+                  <TouchableOpacity
+                    style={[styles.btnPrimary, {opacity: sending ? 0.7 : 1}]}
+                    onPress={handleSend}
+                    disabled={sending}
+                    activeOpacity={0.85}>
+                    {sending ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.btnText}>Enviar</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
             </>
           )}
         </View>
@@ -775,6 +821,40 @@ export default function OpinionScreen({navigation, route}) {
         </View>
       )}
     </SafeAreaView>
+  );
+}
+
+function NotificationRow({n, styles}) {
+  const dateLabel = n.date
+    ? new Date(n.date).toLocaleString('es-MX', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      })
+    : '';
+
+  return (
+    <View
+      style={[
+        styles.notificationItemLarge,
+        n.read ? styles.readCard : styles.unreadCard,
+      ]}>
+      <View style={styles.notLeft}>
+        <Text style={styles.notBranch} numberOfLines={1}>
+          {n.branch || `Venta ${n.saleId ?? ''}`}
+        </Text>
+        <Text style={styles.notDate}>{dateLabel}</Text>
+      </View>
+
+      <View style={styles.notRight}>
+        <Text style={styles.notAmount}>
+          {Number(n.amount || 0).toLocaleString('es-MX', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}
+        </Text>
+        <Text style={styles.notCurrency}>MXN</Text>
+      </View>
+    </View>
   );
 }
 
@@ -791,8 +871,8 @@ function makeStyles({
   SLIDE_HEIGHT,
 }) {
   const basePadding = Math.round(clamp(wp(4), 12, 24));
-  const headerHeight = Math.round(clamp(hp(8), 64, 100));
-  const iconSize = Math.round(clamp(rf(3.8), 21, 28));
+  const headerHeight = Math.round(clamp(hp(8), 84, 100));
+  const iconSize = Math.round(clamp(rf(2.6), 19, 32));
   const starSize = Math.round(clamp(rf(4.6), 18, 28)); // un poco más grande
   const slideHeight = SLIDE_HEIGHT;
   const leftCol = LEFT_COL;
@@ -800,8 +880,8 @@ function makeStyles({
     Math.max(120, width - leftCol - basePadding * 2 - 24),
   );
   const logoW = Math.round(clamp(width * 0.18, 60, 110));
-  const sectionHeadingSize = Math.round(clamp(rf(6.2), 18, 28));
-  const textSmall = Math.round(clamp(rf(4.2), 10, 16)); // preguntas más grandes
+  const sectionHeadingSize = Math.round(clamp(rf(5.8), 18, 28));
+  const textSmall = Math.round(clamp(rf(3.6), 14, 20)); // preguntas más grandes
   const textRegular = Math.round(clamp(rf(3.8), 12, 16));
   const inputHeight = Math.round(clamp(hp(12), 80, 160));
 
@@ -815,22 +895,26 @@ function makeStyles({
     header: {
       flexDirection: 'row',
       alignItems: 'center',
-      padding: basePadding,
+
       borderBottomWidth: 1,
       borderBottomColor: BLUE,
       justifyContent: 'space-between',
       height: headerHeight,
+      paddingHorizontal: basePadding,
     },
     headerButton: {padding: 8},
     headerTitle: {
       flex: 1,
       textAlign: 'center',
-      fontSize: Math.round(clamp(rf(5.2), 16, 22)),
+      fontSize: Math.round(clamp(rf(4.4), 19, 22)),
       fontWeight: '600',
       color: BLUE,
       fontFamily: 'Montserrat-Bold',
     },
-    headerIcons: {flexDirection: 'row', alignItems: 'center'},
+    headerIcons: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
     logo: {
       width: logoW,
       height: Math.round(logoW * 0.28),
@@ -840,17 +924,15 @@ function makeStyles({
 
     badge: {
       position: 'absolute',
-      top: -6,
-      right: -6,
+
       backgroundColor: '#ff3b30',
-      borderRadius: 10,
+      borderRadius: 9,
       paddingHorizontal: 6,
-      paddingVertical: 2,
-      minWidth: 18,
+      paddingVertical: 1,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    badgeText: {color: '#fff', fontSize: Math.round(clamp(rf(2.8), 9, 12))},
+    badgeText: {color: '#fff', fontSize: Math.round(clamp(rf(2.6), 10, 12))},
 
     modalOverlay: {
       flex: 1,
@@ -1052,5 +1134,191 @@ function makeStyles({
       shadowOffset: {width: 0, height: 4},
     },
     localToastText: {color: '#fff', textAlign: 'center', fontWeight: '700'},
+    sentButtonWrapper: {
+      width: '100%',
+      borderRadius: 10,
+      overflow: 'hidden', // IMPORTANT for iOS
+      marginTop: 16,
+    },
+
+    sentButtonInner: {
+      width: '100%',
+      minHeight: Math.round(hp(6)),
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: Math.round(hp(1.6)),
+      paddingHorizontal: Math.round(wp(4)),
+    },
+
+    sentGradientBg: {
+      ...StyleSheet.absoluteFillObject,
+      borderRadius: 10,
+    },
+
+    sentButtonText: {
+      color: '#fff',
+      fontSize: Math.round(clamp(rf(3.8), 12, 14)),
+      fontFamily: 'Montserrat-Bold',
+      lineHeight: Math.round(Math.round(clamp(rf(3.8), 12, 14)) * 1.32),
+      paddingBottom: Platform.OS === 'ios' ? 1 : 0, // prevents glyph clipping
+    },
+
+    modalListHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderBottomWidth: 1,
+      borderColor: '#eee',
+    },
+
+    modalListHeaderText: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: '#333',
+    },
+
+    markAllText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: '#0046ff',
+    },
+    notificationCard: {
+      padding: 14,
+      marginVertical: 6,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: '#e6e6e6',
+    },
+
+    notificationUnread: {
+      backgroundColor: '#eef5ff',
+    },
+
+    notificationRead: {
+      backgroundColor: '#fff',
+    },
+
+    notificationCardText: {
+      fontSize: 14,
+      color: '#333',
+    },
+
+    notificationItemLarge: {
+      flexDirection: 'row',
+      paddingVertical: 12,
+      paddingHorizontal: 12,
+      borderRadius: 10,
+      marginVertical: 8,
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      borderWidth: 1,
+      borderColor: '#eef3ff',
+      backgroundColor: '#fff',
+    },
+
+    unreadCard: {
+      backgroundColor: '#f2f8ff',
+      borderColor: '#d7e8ff',
+    },
+
+    readCard: {
+      backgroundColor: '#ffffff',
+      borderColor: '#f0f0f0',
+    },
+
+    notLeft: {
+      flex: 1,
+      paddingRight: 8,
+    },
+
+    notRight: {
+      alignItems: 'flex-end',
+      justifyContent: 'center',
+    },
+
+    notBranch: {
+      fontWeight: '800',
+      fontSize: 14,
+      color: '#111',
+      marginBottom: 2,
+    },
+
+    notSale: {
+      color: '#666',
+      fontSize: 12,
+      marginBottom: 2,
+    },
+
+    notDate: {
+      color: '#888',
+      fontSize: 11,
+    },
+
+    notAmount: {
+      fontWeight: '900',
+      fontSize: 16,
+      color: '#0b58ff',
+    },
+
+    notCurrency: {
+      color: '#666',
+      fontSize: 11,
+    },
+    markReadButton: {
+      padding: 12,
+      backgroundColor: '#0046ff',
+      alignItems: 'center',
+      margin: 16,
+      borderRadius: 8,
+    },
+    markReadText: {color: '#fff', fontWeight: '600'},
+    dateOverlay: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: 'rgba(0,0,0,0.4)',
+    },
+
+    dateSheet: {
+      backgroundColor: '#fff',
+      borderRadius: 14,
+      padding: 16,
+      width: '90%',
+      maxWidth: 360,
+      alignItems: 'center',
+    },
+
+    datePicker: {
+      width: '100%',
+    },
+
+    dateActions: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginTop: 12,
+      width: '100%',
+    },
+
+    dateBtnSecondary: {
+      paddingVertical: 10,
+      paddingHorizontal: 16,
+    },
+
+    dateBtnSecondaryText: {
+      color: '#666',
+      fontWeight: '600',
+    },
+
+    dateBtnPrimary: {
+      paddingVertical: 10,
+      paddingHorizontal: 16,
+    },
+
+    dateBtnPrimaryText: {
+      color: '#0046ff',
+      fontWeight: '700',
+    },
   });
 }

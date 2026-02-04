@@ -11,7 +11,6 @@ import {
   Easing,
   Platform,
   useWindowDimensions,
-  PixelRatio,
   StatusBar,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
@@ -23,33 +22,84 @@ import {Keyboard} from 'react-native';
 
 const API_BASE = 'https://api.tab-track.com/api/mobileapp';
 const API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2NzM4MjQyNiwianRpIjoiODQyODVmZmUtZDVjYi00OGUxLTk1MDItMmY3NWY2NDI2NmE1IiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NjczODI0MjYsImV4cCI6MTc2OTk3NDQyNiwicm9sIjoiRWRpdG9yIn0.tx84js9-CPGmjLKVPtPeVhVMsQiRtCeNcfw4J4Q2hyc';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
 const PRIMARY = '#FEFFFFFF';
 const BLUE = '#0046ff';
 
 export default function ChangePassword() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-
   const {width, height} = useWindowDimensions();
-  const wp = p => (Number(p) / 100) * width;
-  const hp = p => (Number(p) / 100) * height;
-  const rf = p => {
-    const size = (Number(p) / 100) * width;
-    return Math.round(PixelRatio.roundToNearestPixel(size));
-  };
+
+  // ===== Mode 3 (Login.js) responsive system (same approach) =====
+  const BASE_WIDTH = 375;
+  const rf = size => Math.round((size * width) / BASE_WIDTH);
   const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
-  // pass insets to styles generator so toast & paddings consider safe area
-  const styles = makeStyles({
-    wp,
-    hp,
-    rf,
-    clamp,
-    width,
-    height,
-    Platform,
-    insets,
+  // Same safe-area/status-bar handling pattern as Login.js
+  const topInset = Math.max(insets.top ?? 0, StatusBar.currentHeight ?? 0);
+  const headerApprox = 56;
+  const keyboardVerticalOffset =
+    Platform.OS === 'ios'
+      ? topInset + headerApprox
+      : StatusBar.currentHeight
+      ? StatusBar.currentHeight + 10
+      : 20;
+
+  // These match the *Mode 3* sizing intent from Login.js
+  const scaled = {
+    paddingVertical: clamp(rf(10), 0, 35), // (fixed the order: min->max)
+    logoWidth: clamp(rf(250), 120, Math.round(width * 0.9)),
+    logoHeight: clamp(rf(100), 48, Math.round(width * 0.4)),
+
+    // For this screen title, reuse Login's title scale range
+    screenTitleFont: clamp(rf(28), 16, 46),
+
+    inputWidthPct: '80%',
+    inputHeight: clamp(rf(40), 36, 56),
+    inputRadius: clamp(rf(20), 8, 28),
+    inputPaddingH: clamp(rf(10), 8, 18),
+
+    inicioWidth: Math.min(Math.round(width * 0.8), 420), // Mode 3 uses 80% width feel
+    inicioHeight: clamp(rf(40), 36, 56),
+    inicioRadius: clamp(rf(25), 12, 30),
+
+    buttonTextSize: clamp(rf(16), 12, 20),
+
+    toastBottomIOS: clamp(rf(80), 40, 140),
+    toastBottomAndroid: clamp(rf(40), 20, 120),
+  };
+
+  const toastBottomBase =
+    Platform.OS === 'ios' ? scaled.toastBottomIOS : scaled.toastBottomAndroid;
+  const toastBottom = toastBottomBase + (insets.bottom ?? 0);
+  const successToastBottom = toastBottom + 20;
+
+  const dynamic = StyleSheet.create({
+    containerOverride: {
+      paddingVertical: scaled.paddingVertical,
+    },
+    logoOverride: {
+      width: scaled.logoWidth,
+      height: scaled.logoHeight,
+    },
+    screenTitleOverride: {
+      fontSize: scaled.screenTitleFont,
+    },
+    inputOverride: {
+      width: scaled.inputWidthPct,
+      height: scaled.inputHeight,
+      borderRadius: scaled.inputRadius,
+      paddingHorizontal: scaled.inputPaddingH,
+    },
+    inicioOverride: {
+      width: scaled.inicioWidth,
+      height: scaled.inicioHeight,
+      borderRadius: scaled.inicioRadius,
+    },
+    buttonTextOverride: {
+      fontSize: scaled.buttonTextSize,
+    },
   });
 
   const [oldPassword, setOldPassword] = useState('');
@@ -88,15 +138,12 @@ export default function ChangePassword() {
       setNewPassword('');
     });
 
-    // Obtener el email desde AsyncStorage al montar el componente
     const getEmail = async () => {
       try {
+        // Keep your existing key; note your Login.js stores 'user_email'
+        // If you want it aligned, change this to AsyncStorage.getItem('user_email')
         const storedEmail = await AsyncStorage.getItem('user_mail');
-        if (storedEmail) {
-          setEmail(storedEmail);
-        } else {
-          console.warn('No se encontró el email en AsyncStorage');
-        }
+        if (storedEmail) setEmail(storedEmail);
       } catch (error) {
         console.error('Error al obtener el email desde AsyncStorage:', error);
       }
@@ -115,7 +162,6 @@ export default function ChangePassword() {
     setLoading(true);
 
     try {
-      // leer email e id guardados en login
       const storedUserId = await AsyncStorage.getItem('user_id');
 
       if (!email && !storedUserId) {
@@ -124,7 +170,6 @@ export default function ChangePassword() {
         return;
       }
 
-      // Primero intento endpoint por email (PUT /usuarios/change_password)
       if (email) {
         const urlEmail = `${API_BASE}/usuarios/change-password`;
         const resEmail = await fetch(urlEmail, {
@@ -134,8 +179,8 @@ export default function ChangePassword() {
             Authorization: `Bearer ${API_TOKEN}`,
           },
           body: JSON.stringify({
-            mail: email, // Usar el estado 'email'
-            password: oldPassword, // Usar 'password' en lugar de 'old_password'
+            mail: email,
+            password: oldPassword,
             new_password: newPassword,
           }),
         });
@@ -155,7 +200,6 @@ export default function ChangePassword() {
           setLoading(false);
           return;
         } else {
-          // si falla y no hay userId para fallback, mostrar error
           if (!storedUserId) {
             const errMsg =
               dataEmail?.error || dataEmail?.message || 'No se pudo actualizar';
@@ -163,11 +207,9 @@ export default function ChangePassword() {
             setLoading(false);
             return;
           }
-          // si hay userId, hacemos fallback abajo
         }
       }
 
-      // Fallback: endpoint por id (PUT /usuarios/{id}/change_password)
       if (storedUserId) {
         const urlId = `${API_BASE}/usuarios/${storedUserId}/change-password`;
         const resId = await fetch(urlId, {
@@ -177,7 +219,7 @@ export default function ChangePassword() {
             Authorization: `Bearer ${API_TOKEN}`,
           },
           body: JSON.stringify({
-            password: oldPassword, // Usar 'password' en lugar de 'old_password'
+            password: oldPassword,
             new_password: newPassword,
           }),
         });
@@ -205,7 +247,6 @@ export default function ChangePassword() {
         }
       }
 
-      // Caso extremo
       showToast('No se pudo cambiar la contraseña');
     } catch (err) {
       console.warn('ChangePassword error:', err);
@@ -216,17 +257,12 @@ export default function ChangePassword() {
   };
 
   const handleBack = () => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-    } else {
-      navigation.navigate('Login');
-      // or navigation.replace('Welcome');
-    }
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate('Login');
   };
 
-  // ensure top safe area padding so content doesn't get cut on iOS notch or Android status bar
-  const topPadding = Math.max(insets.top ?? 0, StatusBar.currentHeight ?? 0);
-  const contentShiftY = -Math.round(hp(3));
+  // match your prior visual shift, but keep safe top padding
+  const contentShiftY = -Math.round(height * 0.03);
 
   return (
     <View style={styles.flex}>
@@ -237,7 +273,8 @@ export default function ChangePassword() {
         end={{x: 1, y: 0}}
         style={[
           styles.container,
-          {paddingTop: topPadding},
+          dynamic.containerOverride,
+          {paddingTop: topInset},
           {transform: [{translateY: contentShiftY}]},
         ]}>
         <TouchableOpacity
@@ -246,47 +283,64 @@ export default function ChangePassword() {
           accessibilityLabel="Volver">
           <Ionicons name="arrow-back" size={24} color={BLUE} />
         </TouchableOpacity>
+
         <Image
           source={require('../../assets/images/logo.png')}
-          style={styles.logo}
+          style={[styles.logo, dynamic.logoOverride]}
         />
 
-        <Text style={styles.title}>Actualizar contraseña</Text>
+        <Text style={[styles.title, dynamic.screenTitleOverride]}>
+          Actualizar contraseña
+        </Text>
 
+        {/* MODE 3 input style: styles.input + styles.inputBorder + dynamic.inputOverride */}
         <TextInput
-          style={[styles.input, styles.inputBorder]}
+          style={[styles.input, styles.inputBorder, dynamic.inputOverride]}
           placeholder="Contraseña actual"
           placeholderTextColor="#000"
           secureTextEntry
           value={oldPassword}
           onChangeText={setOldPassword}
+          autoCapitalize="none"
         />
 
         <TextInput
-          style={[styles.input, styles.inputBorder]}
+          style={[styles.input, styles.inputBorder, dynamic.inputOverride]}
           placeholder="Nueva contraseña"
           placeholderTextColor="#000"
           secureTextEntry
           value={newPassword}
           onChangeText={setNewPassword}
+          autoCapitalize="none"
         />
 
+        {/* MODE 3 button style: styles.inicio + dynamic.inicioOverride + opacity on disabled */}
         <TouchableOpacity
-          style={[styles.button, loading && {opacity: 0.6}]}
+          style={[
+            styles.inicio,
+            dynamic.inicioOverride,
+            loading && {opacity: 0.6},
+          ]}
           onPress={handleChangePassword}
           disabled={loading}>
           {loading ? (
-            <ActivityIndicator color="#0046ff" />
+            <ActivityIndicator color={PRIMARY} />
           ) : (
-            <Text style={styles.buttonText}>Actualizar</Text>
+            <Text style={[styles.buttonText, dynamic.buttonTextOverride]}>
+              Actualizar
+            </Text>
           )}
         </TouchableOpacity>
       </LinearGradient>
 
+      {/* MODE 3 toast behavior (bottom differs for success) */}
       <Animated.View
         pointerEvents="none"
         style={[
           toastStyle,
+          toastStyle === styles.toast
+            ? {bottom: toastBottom}
+            : {bottom: successToastBottom},
           {
             opacity: toastAnim,
             transform: [
@@ -299,116 +353,85 @@ export default function ChangePassword() {
             ],
           },
         ]}>
-        <Text style={styles.toastText}>{toastMsg}</Text>
+        <Text
+          style={[
+            styles.toastText,
+            toastStyle === styles.successToast && styles.successToastText,
+          ]}>
+          {toastMsg}
+        </Text>
       </Animated.View>
     </View>
   );
 }
 
-// styles dinamicos generados con helpers responsivos
-function makeStyles({wp, hp, rf, clamp, width, height, Platform, insets}) {
-  // compute safe bottom to place toast above home indicator on iOS and above nav bars on Android
-  const safeBottom = Math.round((insets?.bottom ?? 0) + hp(1.6)); // small gap + responsive
-  const iosDefaultBottom = Math.round(hp(9));
-  const androidDefaultBottom = Math.round(hp(6));
-  const toastBottom = Math.max(
-    safeBottom,
-    Platform.OS === 'ios' ? iosDefaultBottom : androidDefaultBottom,
-  );
-
-  return StyleSheet.create({
-    flex: {flex: 1, backgroundColor: '#fff'},
-
-    container: {
-      flex: 1,
-
-      justifyContent: 'center',
-      alignItems: 'center',
-      paddingHorizontal: Math.round(wp(0)), // some side padding is ok
-      paddingVertical: Math.round(hp(30)),
-    },
-    logo: {
-      width: Math.round(clamp(wp(50), 1200, 2600)), // escala con límites
-      height: Math.round(clamp(rf(110), 36, 120)),
-      resizeMode: 'contain',
-      marginBottom: Math.round(hp(2)),
-    },
-    title: {
-      fontSize: Math.round(clamp(rf(6.2), 18, 28)),
-      color: '#000',
-      fontFamily: 'Montserrat-Bold',
-      textAlign: 'center',
-      marginBottom: Math.round(hp(2)),
-    },
-
-    input: {
-      width: '80%',
-      height: Math.round(clamp(hp(1), 40, 56)),
-      borderRadius: Math.round(wp(4)),
-      paddingHorizontal: Math.round(wp(4)),
-      backgroundColor: 'transparent',
-      marginBottom: Math.round(hp(1.8)),
-      fontSize: Math.round(clamp(rf(3.4), 14, 18)),
-    },
-    inputBorder: {
-      borderColor: '#000',
-      borderWidth: 1,
-      color: '#000',
-    },
-
-    button: {
-      backgroundColor: '#0046ff',
-      borderRadius: Math.round(wp(6)),
-      width: Math.round(wp(60)),
-      height: Math.round(clamp(hp(6.6), 44, 56)),
-      justifyContent: 'center',
-      alignItems: 'center',
-      marginVertical: Math.round(hp(2)),
-    },
-    buttonText: {
-      color: '#fff',
-      fontSize: Math.round(clamp(rf(3.6), 14, 18)),
-      fontFamily: 'Montserrat-Bold',
-    },
-
-    backText: {
-      color: '#000',
-      fontFamily: 'Montserrat-Regular',
-      fontSize: Math.round(clamp(rf(3.2), 12, 16)),
-      marginBottom: Math.round(hp(3)),
-      opacity: 0.9,
-    },
-
-    toast: {
-      position: 'absolute',
-      bottom: toastBottom,
-      alignSelf: 'center',
-      backgroundColor: 'rgba(0,0,0,0.8)',
-      paddingVertical: Math.round(hp(1.2)),
-      paddingHorizontal: Math.round(wp(4)),
-      borderRadius: Math.round(wp(8)),
-      maxWidth: '85%',
-    },
-    toastText: {
-      color: '#fff',
-      fontSize: Math.round(clamp(rf(3.4), 12, 16)),
-      textAlign: 'center',
-      fontFamily: 'Montserrat-Regular',
-    },
-    successToast: {
-      position: 'absolute',
-      bottom: toastBottom,
-      alignSelf: 'center',
-      backgroundColor: 'rgb(0, 50, 186)',
-      paddingVertical: Math.round(hp(1.4)),
-      paddingHorizontal: Math.round(wp(5)),
-      borderRadius: Math.round(wp(9)),
-      maxWidth: '90%',
-    },
-
-    backButton: {
-      alignSelf: 'flex-start',
-      marginLeft: 24,
-    },
-  });
-}
+/**
+ * Base styles copied from Login.js and kept identical where Mode 3 uses them:
+ * - flex, container, logo, input, inputBorder, inicio, buttonText, toast, successToast, backButton, toastText
+ * - title uses the same typography as Login title (Montserrat-Bold, black, centered).
+ */
+const styles = StyleSheet.create({
+  flex: {flex: 1, backgroundColor: '#fff'},
+  container: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingVertical: 90, // overridden by dynamic.containerOverride
+  },
+  logo: {width: 250, height: 100, resizeMode: 'contain', marginTop: 5},
+  title: {
+    fontSize: 34, // overridden by dynamic.screenTitleOverride
+    color: '#000',
+    textAlign: 'center',
+    marginTop: 18,
+    fontFamily: 'Montserrat-Bold',
+  },
+  input: {
+    width: '80%', // overridden by dynamic.inputOverride
+    height: 40, // overridden by dynamic.inputOverride
+    borderRadius: 20, // overridden by dynamic.inputOverride
+    paddingHorizontal: 10, // overridden by dynamic.inputOverride
+    marginTop: 12,
+    backgroundColor: 'transparent',
+  },
+  inputBorder: {borderColor: '#000', borderWidth: 1, color: '#000'},
+  inicio: {
+    width: '50%',
+    height: 40,
+    borderRadius: 25,
+    backgroundColor: '#0046ff',
+    marginTop: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  buttonText: {color: '#fff', fontSize: 16, fontFamily: 'Montserrat-Regular'},
+  toast: {
+    position: 'absolute',
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 30,
+    maxWidth: '90%',
+  },
+  toastText: {
+    color: '#fff',
+    fontSize: 14,
+    textAlign: 'center',
+    fontFamily: 'Montserrat-Regular',
+  },
+  successToast: {
+    position: 'absolute',
+    alignSelf: 'center',
+    backgroundColor: 'rgb(0, 50, 186)',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 30,
+    maxWidth: '90%',
+  },
+  successToastText: {fontSize: 16, fontFamily: 'Montserrat-Bold'},
+  backButton: {
+    alignSelf: 'flex-start',
+    marginLeft: 24,
+  },
+});

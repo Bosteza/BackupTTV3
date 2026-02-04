@@ -15,22 +15,32 @@ import {
   PixelRatio,
   useWindowDimensions,
   Image,
+  UIManager,
 } from 'react-native';
+
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import {request, PERMISSIONS, RESULTS} from 'react-native-permissions';
 import {useFocusEffect, useIsFocused} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {useBottomTabBarHeight} from '@react-navigation/bottom-tabs';
+import LinearGradient from 'react-native-linear-gradient';
 
-// 👇 this is the native view we’ll create in Xcode
+// 👇 native view we created in Xcode
 import IOSQRScannerMother from '../IOSQRScannerMother.native.js';
+
+console.log('[QrResidence] module loaded');
+console.log(
+  'IOSQRScannerView config:',
+  UIManager.getViewManagerConfig('IOSQRScannerView'),
+);
 
 // --- Camera debug helpers ---
 const camLog = (...a) => console.log('[QR][CAM]', ...a);
 const camWarn = (...a) => console.warn('[QR][CAM][WARN]', ...a);
 
-const API_BASE_FALLBACK = 'https://api.tab-track.com';
+const API_BASE_FALLBACK = 'https://api.residence.tab-track.com';
 const API_TOKEN_FALLBACK =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
 
@@ -40,7 +50,7 @@ const STORAGE_KEYS = {
 };
 
 const WHATSAPP_FULL_URL =
-  'https://api.whatsapp.com/send?phone=525647197764&text=%C2%A1Hola!%20Quiero%20m%C3%A1s%20informaci%C3%B3n%20de%20';
+  'https://api.whatsapp.com/send?phone=5214611011391&text=%C2%A1Hola!%20Quiero%20m%C3%A1s%20informaci%C3%B3n%20de%20';
 
 const openWhatsApp = async () => {
   try {
@@ -76,7 +86,9 @@ const extractTokenFromRaw = raw => {
   if (m1 && m1[1]) return m1[1];
   const m2 = raw.match(/[?&]token=([^&]+)/i);
   if (m2 && m2[1]) return m2[1];
+
   try {
+    // NOTE: URL may not exist in older RN; your project seems fine since you already use it.
     const u = new URL(raw);
     const parts = u.pathname.split('/').filter(Boolean);
     if (parts.length) return parts[parts.length - 1];
@@ -110,16 +122,12 @@ const resolveApiHost = async raw => {
 };
 
 const buildHeaders = async () => {
-  let token = API_TOKEN_FALLBACK;
-  try {
-    const storedToken = await AsyncStorage.getItem(STORAGE_KEYS.API_TOKEN);
-    if (storedToken) token = storedToken;
-  } catch (err) {
-    // noop
-  }
-
-  const headers = {'Content-Type': 'application/json'};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const headers = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+  if (API_TOKEN_FALLBACK && String(API_TOKEN_FALLBACK).trim())
+    headers.Authorization = `Bearer ${API_TOKEN_FALLBACK}`;
   return headers;
 };
 
@@ -306,16 +314,15 @@ function AnimatedStatusModal({
 }
 
 // -----------------------------
-// Componente principal QRScreen (iOS-only)
+// Main Screen
 // -----------------------------
-export default function QRScreen({navigation}) {
+export default function QrResidence({navigation}) {
   useEffect(() => {
     camLog('QRScreen mounted (iOS)');
     return () => camLog('QRScreen unmounted');
   }, []);
 
   const isFocused = useIsFocused();
-
   const {width, height} = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
@@ -323,46 +330,108 @@ export default function QRScreen({navigation}) {
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
   const [hasPermission, setHasPermission] = useState(false);
-
+  const [scannerActive, setScannerActive] = useState(true);
   const [flashEnabled, setFlashEnabled] = useState(false);
   const [allowScan, setAllowScan] = useState(false);
   const [allowScanForStatus, setAllowScanForStatus] = useState(false);
+  const [buttonsHeight, setButtonsHeight] = useState(0);
+
   const [statusModalVisible, setStatusModalVisible] = useState(false);
   const [statusLoading, setStatusLoading] = useState(false);
   const [statusResult, setStatusResult] = useState(null);
   const [statusToken, setStatusToken] = useState(null);
+  const [statusQr, setStatusQr] = useState(null);
 
+  const [deptBilling, setDeptBilling] = useState(null);
+  const [deptHistoryLoading, setDeptHistoryLoading] = useState(false);
+  const [deptIdStored, setDeptIdStored] = useState(null);
+
+  const [scanTarget, setScanTarget] = useState(null);
+  const scannerRef = useRef(null);
   const statusTimeoutRef = useRef(null);
   const isHandlingScanRef = useRef(false);
-  const scanningEnabled = allowScan || allowScanForStatus;
 
-  // UI config
+  // For debugging preview: force the native module to run the camera session.
+  // Once it works, switch to: const scanningEnabled = allowScan || allowScanForStatus;
+  const scanningEnabled = true;
+
+  // UI layout
   const baseHeader = 56;
   const headerHeight = clamp(rf(baseHeader), 48, 110);
+  const tabBarHeight = useBottomTabBarHeight(); // will be ~100 in your setup
+
+  const gradientColors = ['#9F4CFF', '#6A43FF', '#2C7DFF'];
+  const gradientCardHeight = Math.round(
+    Math.max(80, Math.min(160, height * 0.14)),
+  );
+  const gradientCardLeftRight = Math.round(Math.max(12, width * 0.06));
+  const gradientInnerPad = Math.round(Math.max(12, width * 0.04));
+  const gradientSeparation = 8;
+
+  const holeGap = clamp(rf(45), 45, 90);
+
   const qrSize = Math.min(Math.round(width * 0.68), clamp(360, 220, 500));
-  const holeTop = headerHeight + clamp(rf(64), 72, 140);
+  /*
+  const holeTop = headerHeight + gradientCardHeight + holeGap;
   const holeLeft = Math.round((width - qrSize) / 2);
+*/
   const cornerArc = clamp(64, 40, 96);
   const cornerThickness = Math.max(8, Math.round((width / 375) * 10));
   const cornerOuterRadius = Math.round(Math.min(qrSize, 320) * 0.06);
+
   const overlayAlpha = 0.26;
   const innerPanelOpacity = 0.04;
-  // --- LOGO sizing (same logic as Android version) ---
+
+  const bottomReserve = tabBarHeight; // prefer this
+
+  const CAMERA_HEIGHT = Math.max(
+    height - headerHeight - bottomReserve,
+    Math.round(height * 0.48),
+  );
+
   const logoMaxWidth = Math.round(Math.min(160, width * 0.36));
   const logoWidth = Math.min(logoMaxWidth, Math.round(qrSize * 0.38));
   const logoHeight = Math.round(logoWidth * 0.5);
+  /*
   const logoTopPos = Math.max(
-    12,
-    holeTop - logoHeight - Math.round(logoHeight * 0.35),
-  );
-  // ---------------------------------------------------
+    headerHeight + Math.round(gradientCardHeight * 0.1),
+    holeTop - logoHeight - Math.round(logoHeight * 0.25),
+  ); */
 
-  const CAMERA_HEIGHT = Math.max(
-    height - headerHeight - insets.bottom - 16,
-    Math.round(height * 0.6),
+  const logoGap = clamp(rf(14), 10, 24);
+  const scanStackHeight = logoHeight + logoGap + qrSize;
+
+  // gradient card position relative to the CAMERA wrapper:
+  // cameraWrapper starts after the header, so headerHeight cancels out
+  const cardTopInCamera = insets.top + gradientSeparation;
+  const cardBottomInCamera = cardTopInCamera + gradientCardHeight;
+
+  // top/bottom padding that we must avoid
+  const topPad = Math.round(cardBottomInCamera + clamp(rf(10), 10, 28));
+  const extraBottomCushion = clamp(rf(18), 12, 28); // small aesthetic gap
+  const bottomPad = Math.round(
+    buttonsHeight + tabBarHeight + insets.bottom + extraBottomCushion,
   );
 
-  // Cámara – solo iOS
+  // center stack inside remaining vertical space
+  const availableH = Math.max(0, CAMERA_HEIGHT - topPad - bottomPad);
+  const stackTop = Math.round(topPad + (availableH - scanStackHeight) / 2);
+
+  // apply positions
+  const logoTopPos = clamp(stackTop, 0, CAMERA_HEIGHT);
+  const holeTop = clamp(
+    Math.round(stackTop + logoHeight + logoGap),
+    0,
+    Math.max(0, CAMERA_HEIGHT - qrSize),
+  );
+
+  const holeLeft = Math.round((width - qrSize) / 2);
+  const fallbackConsumed = 425.0;
+  const fallbackAvailable = 3075.0;
+  const fallbackUtilization =
+    Math.round(
+      (fallbackConsumed / (fallbackConsumed + fallbackAvailable)) * 1000,
+    ) / 10;
   useEffect(() => {
     (async () => {
       try {
@@ -371,6 +440,7 @@ export default function QRScreen({navigation}) {
         camLog('iOS permission result:', res);
         const granted = res === RESULTS.GRANTED;
         setHasPermission(granted);
+
         if (!granted) {
           camWarn('camera permission NOT granted');
           Alert.alert('Permiso denegado', 'Sin cámara no podemos escanear QR', [
@@ -384,16 +454,30 @@ export default function QRScreen({navigation}) {
     })();
   }, [navigation]);
 
-  // Reset al enfocar la pantalla
   useFocusEffect(
     useCallback(() => {
-      camLog('screen focused → reset scan flags');
+      setScannerActive(true);
       setAllowScan(false);
       setAllowScanForStatus(false);
+      setScanTarget(null);
+
+      // If your native view exposes "reactivate", this is where you would call it.
+      // Leaving it as-is is fine.
+      setTimeout(() => {
+        try {
+          if (
+            scannerRef?.current &&
+            typeof scannerRef.current.reactivate === 'function'
+          ) {
+            scannerRef.current.reactivate();
+          }
+        } catch (err) {}
+      }, 300);
 
       return () => {
         setAllowScan(false);
         setAllowScanForStatus(false);
+        setScanTarget(null);
         if (statusTimeoutRef.current) {
           clearTimeout(statusTimeoutRef.current);
           statusTimeoutRef.current = null;
@@ -402,23 +486,76 @@ export default function QRScreen({navigation}) {
     }, []),
   );
 
-  const startManualScan = () => {
-    setAllowScan(true);
+  const reactivateScanner = (allow = false) => {
+    setScannerActive(true);
+    if (allow) setAllowScan(true);
+    setTimeout(() => {
+      try {
+        if (
+          scannerRef?.current &&
+          typeof scannerRef.current.reactivate === 'function'
+        ) {
+          scannerRef.current.reactivate();
+        }
+      } catch (err) {}
+    }, 250);
+  };
+
+  const startManualScan = (target = 'Cuenta') => {
+    setScanTarget(target);
+    reactivateScanner(true);
+  };
+
+  const toggleFlash = () => setFlashEnabled(prev => !prev);
+  const onSuccess = async e => {
+    if (!allowScan && !allowScanForStatus) return;
+
+    setAllowScan(false);
     setAllowScanForStatus(false);
+    setScannerActive(false);
+
+    const raw = e?.data ?? '';
+    const qr = extractTokenFromRaw(raw);
+
+    if (!qr) {
+      setStatusResult({
+        ok: false,
+        message: 'No se encontró un token válido en el QR.',
+      });
+      setStatusLoading(false);
+      setStatusModalVisible(true);
+
+      setTimeout(() => reactivateScanner(true), 900);
+      return;
+    }
+
+    if (allowScanForStatus) {
+      if (statusTimeoutRef.current) {
+        clearTimeout(statusTimeoutRef.current);
+        statusTimeoutRef.current = null;
+      }
+      handleStatusFetchForToken(raw, qr);
+      return;
+    }
+
+    const target = scanTarget || 'Cuenta';
+    setScanTarget(null);
+
+    if (target === 'Miembros') {
+      navigation.navigate('Miembros', {qr});
+      return;
+    }
+
+    navigation.navigate('CuentaResidence', {qr});
   };
 
-  const toggleFlash = () => {
-    camLog('toggleFlash()');
-    setFlashEnabled(prev => !prev);
-  };
-
-  const showStatusModal = (resultObj, token = null, loading = false) => {
+  const showStatusModal = (resultObj, qr = null, loading = false) => {
     if (statusTimeoutRef.current) {
       clearTimeout(statusTimeoutRef.current);
       statusTimeoutRef.current = null;
     }
     setStatusResult(resultObj);
-    setStatusToken(token);
+    setStatusQr(qr);
     setStatusLoading(loading);
     setStatusModalVisible(true);
   };
@@ -426,27 +563,41 @@ export default function QRScreen({navigation}) {
   const hideStatusModal = () => {
     setStatusModalVisible(false);
     setStatusResult(null);
-    setStatusToken(null);
+    setStatusQr(null);
     setStatusLoading(false);
-
+    setScannerActive(true);
     setAllowScan(false);
     setAllowScanForStatus(false);
+    setScanTarget(null);
+    setTimeout(() => {
+      try {
+        if (
+          scannerRef?.current &&
+          typeof scannerRef.current.reactivate === 'function'
+        ) {
+          scannerRef.current.reactivate();
+        }
+      } catch (err) {}
+    }, 300);
   };
 
   const onStatusPress = () => {
-    setAllowScan(false);
     setAllowScanForStatus(true);
-
     showStatusModal(
       {ok: null, message: 'Apunta la cámara al QR para verificar la mesa...'},
       null,
       true,
     );
 
-    if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+    reactivateScanner(false);
 
+    if (statusTimeoutRef.current) {
+      clearTimeout(statusTimeoutRef.current);
+      statusTimeoutRef.current = null;
+    }
     statusTimeoutRef.current = setTimeout(() => {
       setAllowScanForStatus(false);
+      setScannerActive(true);
       showStatusModal(
         {
           ok: false,
@@ -459,11 +610,11 @@ export default function QRScreen({navigation}) {
     }, 7000);
   };
 
-  const handleStatusFetchForToken = async (raw, token) => {
+  const handleStatusFetchForToken = async (raw, qr) => {
     setStatusLoading(true);
     showStatusModal(
       {ok: null, message: 'Consultando estado de la mesa…'},
-      token,
+      qr,
       true,
     );
 
@@ -477,16 +628,17 @@ export default function QRScreen({navigation}) {
             message:
               'No se pudo determinar la URL del servidor desde el QR. Escanea con "Escanear QR" para ver detalles.',
           },
-          token,
+          qr,
           false,
         );
         return;
       }
 
-      const apiUrl = `${host}/api/mesas/r/${encodeURIComponent(token)}`;
+      const apiUrl = `${host}/api/mesas/r/${encodeURIComponent(qr)}`;
       const headers = await buildHeaders();
 
       const res = await fetchWithTimeout(apiUrl, {headers}, 10000);
+
       let json = null;
       try {
         json = await res.json();
@@ -501,7 +653,7 @@ export default function QRScreen({navigation}) {
           json && (json.error || json.message)
             ? json.error || json.message
             : `Error del servidor (${res.status})`;
-        showStatusModal({ok: false, message: msg}, token, false);
+        showStatusModal({ok: false, message: msg}, qr, false);
         return;
       }
 
@@ -513,6 +665,7 @@ export default function QRScreen({navigation}) {
         if (json.items && Array.isArray(json.items))
           summaryParts.push(`Items: ${json.items.length}`);
       }
+
       const summary = summaryParts.length
         ? summaryParts.join(' • ')
         : 'Hay una venta activa para esta mesa.';
@@ -524,7 +677,7 @@ export default function QRScreen({navigation}) {
           details: summary,
           payload: json,
         },
-        token,
+        qr,
         false,
       );
     } catch (err) {
@@ -535,56 +688,166 @@ export default function QRScreen({navigation}) {
           ok: false,
           message: 'Error al conectar con el servidor. Intenta de nuevo.',
         },
-        token,
+        qr,
         false,
       );
     }
   };
 
-  // Lógica que se usaba antes en onSuccess (reutilizada)
-  const onSuccess = async e => {
-    camLog('QR read flags', {allowScan, allowScanForStatus});
+  const fetchDepartmentHistory = useCallback(async () => {
+    setDeptHistoryLoading(true);
+    setDeptBilling(null);
 
-    if (!allowScan && !allowScanForStatus) {
-      camLog('read ignored (no scanning allowed)');
-      return;
-    }
-
-    const raw = e?.data ?? '';
-    const token = extractTokenFromRaw(raw);
-
-    camLog('RAW QR', raw);
-    camLog('TOKEN', token);
-
-    // stop scanning after we capture one QR
-    setAllowScan(false);
-    setAllowScanForStatus(false);
-
-    if (!token) {
-      setStatusResult({
-        ok: false,
-        message: 'No se encontró un token válido en el QR.',
-      });
-      setStatusLoading(false);
-      setStatusModalVisible(true);
-      return;
-    }
-
-    if (allowScanForStatus) {
-      if (statusTimeoutRef.current) {
-        clearTimeout(statusTimeoutRef.current);
-        statusTimeoutRef.current = null;
+    try {
+      let dept = null;
+      try {
+        const rawDept = await AsyncStorage.getItem(
+          'user_residence_departamento_id_actual',
+        );
+        if (
+          rawDept !== null &&
+          rawDept !== undefined &&
+          String(rawDept).trim() !== ''
+        ) {
+          dept = String(rawDept).trim();
+        }
+      } catch (e) {
+        console.warn('[dept-history] error leyendo AsyncStorage', e);
       }
-      handleStatusFetchForToken(raw, token);
-      return;
+
+      setDeptIdStored(dept);
+
+      if (!dept) {
+        console.warn(
+          '[dept-history] user_residence_departamento_id_actual no encontrado en AsyncStorage',
+        );
+        setDeptHistoryLoading(false);
+        return;
+      }
+
+      const now = new Date();
+      const periodo = `${now.getFullYear()}${String(
+        now.getMonth() + 1,
+      ).padStart(2, '0')}`;
+
+      const tzOffset = -360;
+
+      const baseHost = API_BASE_FALLBACK.replace(/\/$/, '');
+
+      const path = `/api/residence/departamentos/${encodeURIComponent(
+        String(dept),
+      )}/consumptions/history?periodo=${encodeURIComponent(
+        periodo,
+      )}&detalle=false&tz_offset_minutes=${encodeURIComponent(
+        String(tzOffset),
+      )}`;
+      const url = `${baseHost}${path}`;
+
+      const headers = {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      };
+      if (API_TOKEN_FALLBACK && String(API_TOKEN_FALLBACK).trim())
+        headers.Authorization = `Bearer ${API_TOKEN_FALLBACK}`;
+
+      console.log('[dept-history] consultando URL:', url);
+
+      const res = await fetchWithTimeout(url, {headers}, 10000);
+      let json = null;
+      try {
+        json = await res.json();
+      } catch (e) {
+        json = null;
+      }
+
+      console.log('[dept-history] status:', res.status, json);
+
+      if (!res.ok) {
+        if (res.status === 404) {
+          Alert.alert(
+            'Historial no encontrado',
+            'Ruta 404: departamento no existe o ruta no disponible para este host / periodo.',
+          );
+        } else {
+          Alert.alert('Error al consultar historial', `HTTP ${res.status}.`);
+        }
+        setDeptBilling(null);
+        setDeptHistoryLoading(false);
+        return;
+      }
+
+      if (
+        json &&
+        Array.isArray(json.periodos) &&
+        json.periodos.length > 0 &&
+        json.periodos[0].billing
+      ) {
+        const b = json.periodos[0].billing;
+        setDeptBilling({
+          moneda:
+            b.moneda ??
+            (json.departamento && json.departamento.moneda) ??
+            'MXN',
+          monto_mensual_usado: Number(b.monto_mensual_usado ?? 0) || 0,
+          porcentaje_usado: Number(b.porcentaje_usado ?? 0) || 0,
+          saldo_disponible: Number(b.saldo_disponible ?? 0) || 0,
+          saldo_mensual:
+            Number(
+              b.saldo_mensual ??
+                (json.departamento && json.departamento.saldo_mensual) ??
+                0,
+            ) || 0,
+        });
+      } else if (
+        json &&
+        json.departamento &&
+        typeof json.departamento === 'object' &&
+        json.departamento.saldo_mensual !== undefined
+      ) {
+        // CORRECCIÓN: no asignar monto_mensual_usado con saldo_mensual (eso provocaba que usado tomara el valor del saldo)
+        // ahora intentamos tomar las propiedades reales si existen en 'departamento'
+        setDeptBilling({
+          moneda: json.departamento.moneda ?? 'MXN',
+          monto_mensual_usado:
+            Number(json.departamento.monto_mensual_usado ?? 0) || 0,
+          porcentaje_usado:
+            Number(json.departamento.porcentaje_usado ?? 0) || 0,
+          saldo_disponible:
+            Number(
+              json.departamento.saldo_disponible ??
+                json.departamento.saldo_mensual ??
+                0,
+            ) || 0,
+          saldo_mensual: Number(json.departamento.saldo_mensual ?? 0) || 0,
+        });
+      } else {
+        console.warn('[dept-history] OK pero sin estructura esperada:', json);
+        setDeptBilling(null);
+      }
+    } catch (err) {
+      console.warn('fetchDepartmentHistory error', err);
+      Alert.alert(
+        'Error',
+        'No fue posible consultar historial del departamento. Revisa conexión / host.',
+      );
+      setDeptBilling(null);
+    } finally {
+      setDeptHistoryLoading(false);
     }
+  }, []);
 
-    navigation.navigate('Escanear', {token});
-  };
+  useFocusEffect(
+    useCallback(() => {
+      fetchDepartmentHistory();
+    }, [fetchDepartmentHistory]),
+  );
 
-  // Handler que recibe el evento desde el componente nativo
+  useEffect(() => {
+    fetchDepartmentHistory();
+  }, [fetchDepartmentHistory]);
+
+  // Handler that receives the event from native view
   const handleNativeQRRead = event => {
-    const scanningEnabled = allowScan || allowScanForStatus;
     if (!scanningEnabled) return;
 
     if (isHandlingScanRef.current) return;
@@ -606,8 +869,27 @@ export default function QRScreen({navigation}) {
     );
   }
 
-  const buttonsTop = holeTop + qrSize + clamp(rf(48), 80, 160);
-
+  const consumed = deptBilling
+    ? Number(deptBilling.monto_mensual_usado || 0)
+    : fallbackConsumed;
+  const available = deptBilling
+    ? Number(deptBilling.saldo_disponible || 0)
+    : fallbackAvailable;
+  const utilization =
+    consumed + available > 0
+      ? Math.round((consumed / (consumed + available)) * 1000) / 10
+      : 0;
+  const consumedDisplay = deptHistoryLoading
+    ? '…'
+    : deptBilling
+    ? `${Number(consumed).toFixed(2)}`
+    : `${fallbackConsumed.toFixed(2)}`;
+  const availableDisplay = deptHistoryLoading
+    ? '…'
+    : deptBilling
+    ? `${Number(available).toFixed(2)}`
+    : `${fallbackAvailable.toFixed(2)}`;
+  const utilizationDisplay = deptHistoryLoading ? '…' : `${utilization}%`;
   return (
     <SafeAreaView style={{flex: 1, backgroundColor: '#000'}}>
       {isFocused && (
@@ -617,6 +899,7 @@ export default function QRScreen({navigation}) {
           backgroundColor="transparent"
         />
       )}
+
       {/* Header */}
       <View style={[styles.header, {height: headerHeight}]}>
         <TouchableOpacity
@@ -646,15 +929,104 @@ export default function QRScreen({navigation}) {
         </TouchableOpacity>
       </View>
 
-      {/* Cámara */}
+      {/* Gradient card */}
+      <View
+        pointerEvents="box-none"
+        onLayout={e => setButtonsHeight(e.nativeEvent.layout.height)}
+        style={{
+          position: 'absolute',
+          top: insets.top + headerHeight + gradientSeparation,
+          left: gradientCardLeftRight,
+          right: gradientCardLeftRight,
+          zIndex: 60,
+        }}>
+        {/* OUTER (shadow, not clipped) */}
+        <View style={[styles.cardShadow, {borderRadius: 14}]}>
+          {/* INNER (clips gradient) */}
+          <View
+            style={{
+              borderRadius: 14,
+              overflow: 'hidden',
+              height: Math.ceil(gradientCardHeight),
+            }}>
+            <LinearGradient
+              colors={gradientColors}
+              start={{x: 0, y: 0}}
+              end={{x: 1, y: 1}}
+              style={{flex: 1}}>
+              <View style={{flex: 1, padding: gradientInnerPad}}>
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}>
+                  <View>
+                    <Text style={styles.gradientSmallLabel}>Usado</Text>
+                    <Text style={styles.gradientSmallValue}>
+                      ${consumedDisplay}
+                    </Text>
+                  </View>
+
+                  <View style={{alignItems: 'flex-end'}}>
+                    <Text style={styles.gradientSmallLabel}>Disponible</Text>
+                    <Text
+                      style={[
+                        styles.gradientSmallValue,
+                        {
+                          fontSize: Math.round(clamp(rf(20), 18, 26)),
+                          fontWeight: '900',
+                        },
+                      ]}>
+                      ${availableDisplay}
+                    </Text>
+                  </View>
+                </View>
+                <View style={{height: 10}} />
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}>
+                  <View style={styles.progressTrackSmall}>
+                    <View
+                      style={[
+                        styles.progressFillSmall,
+                        {
+                          width: `${Math.min(100, Math.max(0, utilization))}%`,
+                        },
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.progressLabelSmall}>
+                    {deptHistoryLoading ? '…' : utilizationDisplay} utilizado
+                  </Text>
+                </View>
+              </View>
+            </LinearGradient>
+          </View>
+        </View>
+      </View>
+
+      {/* Camera + overlay */}
       <View style={[styles.cameraWrapper, {height: CAMERA_HEIGHT}]}>
-        <IOSQRScannerMother
-          style={[styles.camera, {height: CAMERA_HEIGHT}]}
-          torchEnabled={flashEnabled}
-          scanningEnabled={scanningEnabled}
-          onQRCodeRead={handleNativeQRRead}
-        />
-        {/* Overlay (hueco para QR) */}
+        {scannerActive && (
+          <IOSQRScannerMother
+            ref={scannerRef}
+            onRead={onSuccess}
+            style={[styles.camera, {height: CAMERA_HEIGHT}]}
+            torchEnabled={flashEnabled}
+            scanningEnabled={scanningEnabled}
+            onQRCodeRead={handleNativeQRRead}
+            showMarker={false}
+            reactivate={false}
+            topViewStyle={styles.zero}
+            bottomViewStyle={styles.zero}
+          />
+        )}
+
+        {/* Overlay */}
         <View style={[styles.overlay, {height: CAMERA_HEIGHT}]}>
           <View
             style={[
@@ -663,7 +1035,7 @@ export default function QRScreen({navigation}) {
             ]}
           />
 
-          {/* --- LOGO overlay --- */}
+          {/* Logo */}
           <View
             style={{
               position: 'absolute',
@@ -671,7 +1043,7 @@ export default function QRScreen({navigation}) {
               left: 0,
               right: 0,
               alignItems: 'center',
-              zIndex: 999,
+              zIndex: 30,
               pointerEvents: 'none',
             }}>
             <Image
@@ -684,11 +1056,10 @@ export default function QRScreen({navigation}) {
                 shadowOffset: {width: 0, height: 2},
                 shadowOpacity: 0.12,
                 shadowRadius: 4,
-                elevation: 40,
+                elevation: 4,
               }}
             />
           </View>
-          {/* -------------------- */}
 
           <View style={{flexDirection: 'row'}}>
             <View
@@ -713,7 +1084,7 @@ export default function QRScreen({navigation}) {
                 }}
               />
 
-              {/* esquinas */}
+              {/* corners */}
               <View
                 style={{
                   position: 'absolute',
@@ -794,20 +1165,21 @@ export default function QRScreen({navigation}) {
             ]}
           />
         </View>
-        {/* Botones flotantes */}
+
+        {/* Floating buttons */}
         <View
           pointerEvents="box-none"
           style={{
             position: 'absolute',
-            top: buttonsTop,
+            bottom: bottomReserve,
             left: 0,
-            width,
+            right: 0,
             alignItems: 'center',
             zIndex: 40,
           }}>
           <TouchableOpacity
             activeOpacity={1}
-            onPress={startManualScan}
+            onPress={() => startManualScan('Cuenta')}
             style={[
               styles.floatPrimary,
               {
@@ -836,34 +1208,34 @@ export default function QRScreen({navigation}) {
 
           <TouchableOpacity
             activeOpacity={1}
-            onPress={onStatusPress}
+            onPress={() => navigation.navigate('Miembros')}
             style={[
-              styles.floatSecondary,
+              styles.floatPrimary,
               {
                 width: Math.min(360, Math.round(width * 0.78)),
                 paddingVertical: clamp(rf(10), 8, 16),
+                marginTop: 0,
               },
             ]}>
             <View style={styles.actionContent}>
               <Ionicons
-                name="time-outline"
+                name="person-outline"
                 size={rf(16)}
                 color="#fff"
                 style={{marginRight: 10}}
               />
               <Text
                 style={[
-                  styles.secondaryActionText,
+                  styles.primaryActionText,
                   {fontSize: clamp(rf(15), 13, 17)},
                 ]}>
-                Status
+                Miembros
               </Text>
             </View>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Animated Modal */}
       <AnimatedStatusModal
         visible={statusModalVisible}
         loading={statusLoading}
@@ -871,8 +1243,7 @@ export default function QRScreen({navigation}) {
         onClose={hideStatusModal}
         onScan={() => {
           hideStatusModal();
-          if (statusToken)
-            navigation.navigate('Escanear', {token: statusToken});
+          if (statusQr) navigation.navigate('Escanear', {qr: statusQr});
         }}
         headerHeight={headerHeight}
       />
@@ -881,7 +1252,7 @@ export default function QRScreen({navigation}) {
 }
 
 // -----------------------------
-// Estilos (igual que tenías)
+// Styles (module-level)
 // -----------------------------
 const modalStyles = StyleSheet.create({
   overlayContainer: {
@@ -925,7 +1296,6 @@ const modalStyles = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
-  root: {flex: 1, backgroundColor: '#fff'},
   loading: {
     flex: 1,
     justifyContent: 'center',
@@ -956,6 +1326,7 @@ const styles = StyleSheet.create({
   overlay: {position: 'absolute', top: 0, left: 0, width: '100%', zIndex: 10},
   overlayRow: {width: '100%'},
   overlayCol: {},
+
   hole: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -986,35 +1357,41 @@ const styles = StyleSheet.create({
   primaryActionText: {color: '#fff', fontWeight: '800'},
   secondaryActionText: {color: '#fff', fontWeight: '700'},
 
-  zero: {height: 0, flex: 0},
+  cardShadow: {
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    shadowOffset: {width: 0, height: 6},
+    elevation: 8,
+    overflow: 'visible',
+    backgroundColor: 'transparent',
+  },
 
-  statusModalOverlay: {
+  gradientCardSmall: {
+    width: '100%',
+    overflow: 'hidden',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowOffset: {width: 0, height: 8},
+    shadowRadius: 14,
+  },
+  gradientSmallLabel: {
+    color: 'rgba(255,255,255,0.95)',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  gradientSmallValue: {color: '#fff', fontWeight: '900', fontSize: 18},
+
+  progressTrackSmall: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.45)',
-  },
-  statusModalBox: {
-    width: '86%',
-    backgroundColor: '#fff',
+    backgroundColor: 'rgba(255,255,255,0.18)',
     borderRadius: 12,
-    padding: 18,
-    alignItems: 'flex-start',
+    height: 10,
+    overflow: 'hidden',
+    marginRight: 12,
   },
-  statusTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#0046ff',
-    marginBottom: 8,
-  },
-  statusMessage: {fontSize: 15, color: '#333', marginBottom: 6},
-  statusDetails: {fontSize: 13, color: '#666', marginBottom: 6},
-  statusBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  statusBtnText: {fontSize: 14, fontWeight: '700'},
+  progressFillSmall: {backgroundColor: '#fff', height: '100%'},
+  progressLabelSmall: {color: 'rgba(255,255,255,0.95)', fontSize: 12},
+  progressLabel: {color: '#fff'},
 });

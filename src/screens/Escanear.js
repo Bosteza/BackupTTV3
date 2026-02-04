@@ -1,4 +1,4 @@
-import React, {useEffect, useState, useCallback, useRef} from 'react';
+import React, {useEffect, useState, useCallback, useRef, useMemo} from 'react';
 import {
   SafeAreaView,
   View,
@@ -25,7 +25,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 const API_BASE_URL = 'https://api.tab-track.com';
 const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2NzM4MjQyNiwianRpIjoiODQyODVmZmUtZDVjYi00OGUxLTk1MDItMmY3NWY2NDI2NmE1IiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NjczODI0MjYsImV4cCI6MTc2OTk3NDQyNiwicm9sIjoiRWRpdG9yIn0.tx84js9-CPGmjLKVPtPeVhVMsQiRtCeNcfw4J4Q2hyc';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
 
 const VISITS_STORAGE_KEY = 'user_visits';
 const PENDING_VISITS_KEY = 'pending_visits';
@@ -243,12 +243,24 @@ export default function Escanear() {
   const [styledAlertTitle, setStyledAlertTitle] = useState('');
   const [styledAlertMessage, setStyledAlertMessage] = useState('');
 
+  // Nuevo modal blanco para alertas de conflicto
+  const [conflictAlertVisible, setConflictAlertVisible] = useState(false);
+  const [conflictAlertTitle, setConflictAlertTitle] = useState('');
+  const [conflictAlertMessage, setConflictAlertMessage] = useState('');
+
   const showStyledAlert = (t, m) => {
     setStyledAlertTitle(t || 'Aviso');
     setStyledAlertMessage(m || '');
     setStyledAlertVisible(true);
   };
   const hideStyledAlert = () => setStyledAlertVisible(false);
+
+  const showConflictAlert = (t, m) => {
+    setConflictAlertTitle(t || 'Aviso');
+    setConflictAlertMessage(m || '');
+    setConflictAlertVisible(true);
+  };
+  const hideConflictAlert = () => setConflictAlertVisible(false);
 
   const openErrorModal = m => {
     setErrorModalMessage(m || 'Ocurrió un error');
@@ -474,12 +486,55 @@ export default function Escanear() {
         else setRestaurantImageUri(null);
 
         const rawItems = Array.isArray(json.items) ? json.items : [];
+
+        // --- NUEVA LÓGICA: detectar si precio_item es precio UNITARIO o TOTAL DE LÍNEA ---
+        const reportedTotalFromJson = safeNum(
+          json.total_consumo ??
+            json.total ??
+            json.totales_venta?.total_neto ??
+            json.totales_venta?.total_neto ??
+            0,
+        );
+        const sumPrecioFieldNoQty = rawItems.reduce((s, it) => {
+          return (
+            s +
+            safeNum(
+              it.precio_item ??
+                it.precio ??
+                it.price ??
+                it.precio_unitario ??
+                0,
+            )
+          );
+        }, 0);
+
+        // Si reportedTotal está presente y coincide (aprox.) con la suma de los campos precio_item **sin** multiplicar por cantidad,
+        // entonces asumimos que esos campos representan el TOTAL de la línea (y por tanto hay que dividir entre cantidad).
+        const EPS = 0.5; // tolerancia en MXN (pequeña)
+        const precioItemRepresentaTotalDeLinea =
+          reportedTotalFromJson > 0 &&
+          Math.abs(sumPrecioFieldNoQty - reportedTotalFromJson) <= EPS;
+
         const expandedItems = [];
         rawItems.forEach((it, idx) => {
           const rawQty = Math.max(1, safeNum(it.cantidad ?? it.qty ?? 1));
-          const rawPrecio = safeNum(
+          const rawPrecioField = safeNum(
             it.precio_item ?? it.precio ?? it.price ?? it.precio_unitario ?? 0,
           );
+
+          // si detectamos que precio_item = total de la línea -> dividir entre cantidad
+          let unitPrice;
+          if (
+            rawQty > 1 &&
+            precioItemRepresentaTotalDeLinea &&
+            rawPrecioField !== 0
+          ) {
+            unitPrice = +(rawPrecioField / rawQty).toFixed(2);
+          } else {
+            // caso por defecto: precio_field es precio unitario (o qty==1), usarlo directamente
+            unitPrice = +Number(rawPrecioField || 0).toFixed(2);
+          }
+
           const originalId =
             it.codigo_item ?? it.codigo ?? it.id ?? it.item_id ?? `item-${idx}`;
           for (let k = 0; k < rawQty; k++) {
@@ -488,8 +543,8 @@ export default function Escanear() {
               id: String(unitId),
               name: it.nombre_item ?? it.nombre ?? it.name ?? `Item ${idx + 1}`,
               qty: 1,
-              unitPrice: +Number(rawPrecio || 0).toFixed(2),
-              lineTotal: +Number(rawPrecio || 0).toFixed(2),
+              unitPrice: unitPrice,
+              lineTotal: unitPrice,
               canceled: !!it.canceled || !!it.cancelado,
               raw: it,
               original_line_id: String(originalId),
@@ -964,6 +1019,20 @@ export default function Escanear() {
     ? new Date(fechaCierre).toLocaleString('es-MX')
     : '';
 
+  // --- cálculo para saber si hay pagos por consumo ---
+  const consumoPaid = useMemo(() => {
+    try {
+      const anyItemPaid =
+        Array.isArray(items) &&
+        items.some(it => !!it.paid || safeNum(it.paidAmount) > 0);
+      const diff = Number(originalTotalConsumo) - Number(totalConsumo);
+      const hasDiff = Number.isFinite(diff) && diff > 0.005;
+      return anyItemPaid || hasDiff;
+    } catch (e) {
+      return false;
+    }
+  }, [items, originalTotalConsumo, totalConsumo]);
+
   const layoutWidth = Math.min(width - sidePad * 2, 420);
   const headerPaddingHorizontal = Math.max(sidePad, wp(7));
   const topBarBaseHeight = Math.max(64, hp(8));
@@ -978,6 +1047,11 @@ export default function Escanear() {
   const itemPriceWidth = Math.min(Math.max(wp(28), 90), 140);
   const subtotalValueFont = clamp(rf(3.8), 16, 22);
   const primaryBtnPadding = Math.max(12, hp(1.6));
+
+  // botones deshabilitados (para feedback visual)
+  const primaryDisabled = consumoPaid || equalsSplitPaid; // Pago en una sola: bloquear si consumoPaid o equal paid
+  const pagarConsumoDisabled = equalsSplitPaid; // Pagar por consumo: bloquear si equal paid
+  const equalSplitDisabled = consumoPaid; // Pago por partes iguales: bloquear si consumoPaid
 
   return (
     <SafeAreaView style={[styles.safe, {paddingTop: topSafe}]}>
@@ -1398,11 +1472,20 @@ export default function Escanear() {
             style={[
               styles.primaryButton,
               {width: layoutWidth, paddingVertical: primaryBtnPadding},
+              primaryDisabled ? {opacity: 0.6} : null,
             ]}
             activeOpacity={0.85}
             onPress={async () => {
+              // Bloqueos: si hay pago por consumo o pago por partes iguales -> bloquear
+              if (consumoPaid) {
+                showConflictAlert(
+                  'Pago por consumo en curso',
+                  'Se está procesando un pago por consumo — no puedes proceder con este método ahora.',
+                );
+                return;
+              }
               if (equalsSplitPaid) {
-                showStyledAlert(
+                showConflictAlert(
                   'Pago por partes iguales',
                   'Se está procesando un pago por partes iguales — no puedes proceder con este método.',
                 );
@@ -1476,7 +1559,8 @@ export default function Escanear() {
 
               navigation.navigate('OneExhibicion', paramsToSend);
             }}
-            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+            disabled={primaryDisabled}>
             <Text
               style={[
                 styles.primaryButtonText,
@@ -1490,9 +1574,18 @@ export default function Escanear() {
             style={[
               styles.secondaryButton,
               {width: layoutWidth, paddingVertical: primaryBtnPadding},
+              pagarConsumoDisabled ? {opacity: 0.6} : null,
             ]}
             activeOpacity={0.85}
             onPress={async () => {
+              // Bloqueo si equal split ya pagado
+              if (equalsSplitPaid) {
+                showConflictAlert(
+                  'Pago por partes iguales en curso',
+                  'Se está procesando un pago por partes iguales — no puedes proceder con el pago por consumo.',
+                );
+                return;
+              }
               const paramsDividir = {
                 token,
                 items,
@@ -1539,7 +1632,8 @@ export default function Escanear() {
               }
               navigation.navigate('Dividir', paramsDividir);
             }}
-            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+            disabled={pagarConsumoDisabled}>
             <Text
               style={[
                 styles.secondaryButtonText,
@@ -1557,9 +1651,18 @@ export default function Escanear() {
                 marginTop: 12,
                 paddingVertical: primaryBtnPadding,
               },
+              equalSplitDisabled ? {opacity: 0.6} : null,
             ]}
             activeOpacity={0.85}
             onPress={async () => {
+              // Bloqueo si hay pago por consumo detectado
+              if (consumoPaid) {
+                showConflictAlert(
+                  'Pago por consumo en curso',
+                  'Se está procesando un pago por consumo — no puedes proceder con el pago por partes iguales.',
+                );
+                return;
+              }
               const normalizedItemsForEqual = (items || []).map(it => {
                 const computedPrice =
                   Number(it.unitPrice ?? it.lineTotal ?? it.price ?? 0) || 0;
@@ -1617,7 +1720,8 @@ export default function Escanear() {
               }
               navigation.navigate('EqualSplit', paramsEqual);
             }}
-            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+            disabled={equalSplitDisabled}>
             <Text
               style={[
                 styles.secondaryButtonText,
@@ -1688,6 +1792,31 @@ export default function Escanear() {
               <Text style={[styles.gatewayModalButtonText]}>Aceptar</Text>
             </TouchableOpacity>
           </LinearGradient>
+        </View>
+      )}
+
+      {/* Modal blanco con texto negro para alertas de conflicto */}
+      {conflictAlertVisible && (
+        <View style={styles.conflictBackdrop}>
+          <View
+            style={[
+              styles.conflictBox,
+              {width: Math.min(layoutWidth - 48, Math.max(wp(72), 300))},
+            ]}>
+            <Text style={styles.conflictTitle}>{conflictAlertTitle}</Text>
+            <Text style={styles.conflictMessage}>{conflictAlertMessage}</Text>
+
+            <View style={{height: 12}} />
+
+            <View style={{flexDirection: 'row', justifyContent: 'flex-end'}}>
+              <TouchableOpacity
+                onPress={() => hideConflictAlert()}
+                style={styles.conflictBtn}
+                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+                <Text style={styles.conflictBtnText}>Aceptar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       )}
     </SafeAreaView>
@@ -1937,4 +2066,44 @@ const styles = StyleSheet.create({
   gatewayModalButtonText: {color: '#0046ff', fontWeight: '800', fontSize: 15},
 
   center: {flex: 1, alignItems: 'center', justifyContent: 'center'},
+
+  // estilos nuevos para modal blanco (alertas de conflicto)
+  conflictBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  conflictBox: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'flex-start',
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowOffset: {width: 0, height: 8},
+    shadowRadius: 12,
+  },
+  conflictTitle: {
+    fontWeight: '800',
+    color: '#111',
+    fontSize: 16,
+    marginBottom: 6,
+    textAlign: 'left',
+  },
+  conflictMessage: {color: '#111', fontSize: 14, lineHeight: 20},
+  conflictBtn: {
+    backgroundColor: '#0046ff',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  conflictBtnText: {color: '#fff', fontWeight: '800'},
 });

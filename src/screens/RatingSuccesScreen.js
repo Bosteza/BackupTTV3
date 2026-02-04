@@ -23,6 +23,13 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 export default function RatingSuccessScreen() {
   const navigation = useNavigation();
+
+  useEffect(() => {
+    navigation.setOptions({
+      gestureEnabled: false, // only applies while this screen is active
+    });
+  }, [navigation]);
+
   const animRef = useRef(null);
 
   const {width, height} = useWindowDimensions();
@@ -133,23 +140,7 @@ export default function RatingSuccessScreen() {
           />
         </TouchableOpacity>
 
-        <Text style={[styles.headerTitle, {fontSize: clamp(rf(18), 14, 22)}]}>
-          Experiencias
-        </Text>
-
-        <View style={styles.headerRight}>
-          <TouchableOpacity
-            onPress={() => setShowNotifications(true)}
-            style={[styles.headerButton, {marginLeft: 12}]}
-            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-            <Ionicons name="notifications-outline" size={30} color="#0051c9" />
-            {unreadCount > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{unreadCount}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-        </View>
+        <View style={styles.headerRight}></View>
       </View>
 
       {/* Fondo y contenido */}

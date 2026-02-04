@@ -1005,16 +1005,15 @@ export default function Dividir() {
         backgroundColor="transparent"
       />
 
-      <View style={[styles.topBar, {paddingTop: 0}]}>
-        <TouchableOpacity
-          style={styles.backBtn}
-          onPress={handleBack}
-          hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+      <View style={styles.topBar}>
+        <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
           <Text style={styles.backArrow}>{'‹'}</Text>
         </TouchableOpacity>
 
         <Text style={styles.topTitle}>Tu cuenta</Text>
-        <Text style={styles.topDate} />
+
+        {/* right placeholder (or your right button) */}
+        <View style={styles.rightSlot} />
       </View>
 
       <ScrollView
@@ -1083,17 +1082,6 @@ export default function Dividir() {
               <Text style={[styles.divideTitle]}>
                 {'Seleccione sus productos'}
               </Text>
-
-              <View style={styles.stackButtons}>
-                {!hideEqualButtonFlag && (
-                  <TouchableOpacity
-                    style={styles.ghostButton}
-                    onPress={handlePartesIguales}
-                    hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                    <Text style={styles.ghostButtonText}>Partes iguales</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
             </View>
           </View>
         </LinearGradient>
@@ -1318,13 +1306,20 @@ function makeStyles({
       width: '100%',
       height: Math.round(hp(9.6)),
       paddingHorizontal: Math.round(sidePad || wp(3.5)),
-      alignItems: 'center',
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      backgroundColor: '#ffffff',
+      justifyContent: 'center',
+      backgroundColor: '#fff',
       borderBottomWidth: 1,
       borderBottomColor: '#eee',
-      paddingTop: 0,
+    },
+
+    topTitle: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      textAlign: 'center',
+      fontSize: Math.round(clamp(rf(4.2), 14, 18)),
+      fontWeight: '800',
+      color: '#0b58ff',
     },
     backBtn: {
       width: Math.round(Math.max(44, wp(12))),
@@ -1336,12 +1331,12 @@ function makeStyles({
       color: '#0b58ff',
       marginLeft: 2,
     },
-    topTitle: {
-      fontSize: Math.round(clamp(rf(4.2), 14, 18)),
-      fontWeight: '800',
-      color: '#0b58ff',
+    rightSlot: {
+      position: 'absolute',
+      right: Math.round(sidePad || wp(3.5)),
+      width: Math.round(Math.max(44, wp(12))), // match backBtn width
+      height: 1,
     },
-    topDate: {fontSize: Math.round(clamp(rf(2.8), 10, 12)), color: '#6b7280'},
 
     container: {
       alignItems: 'center',
@@ -1358,17 +1353,24 @@ function makeStyles({
     },
     gradientRow: {flexDirection: 'row', justifyContent: 'space-between'},
 
-    leftCol: {flexDirection: 'column', alignItems: 'flex-start', left: 20},
     tabtrackLogo: {},
     logoWrap: {backgroundColor: 'rgba(255,255,255,0.12)'},
     restaurantImage: {backgroundColor: '#fff'},
 
+    leftCol: {
+      flexDirection: 'column',
+      alignItems: 'flex-start',
+      marginLeft: 20, // instead of left: 20 (layout-aware)
+    },
+
     rightCol: {
-      alignItems: isNarrow ? 'flex-start' : 'flex-end',
+      alignItems: 'flex-start',
       justifyContent: 'flex-start',
       paddingTop: 45,
-      left: 25,
+
+      paddingLeft: 25, // instead of left: 25 (shifts text, not the whole block)
     },
+
     // Pregunta un poco más pequeña que antes, y alineación responsiva (derecha en pantallas amplias)
     divideTitle: {
       color: '#fff',
@@ -1376,7 +1378,7 @@ function makeStyles({
       fontWeight: '900',
       lineHeight: Math.round(clamp(rf(7.8), 20, 42)),
       marginBottom: Math.round(hp(1)),
-      textAlign: isNarrow ? 'left' : 'right',
+      textAlign: 'left',
       width: '100%',
     },
 

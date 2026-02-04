@@ -23,7 +23,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 const API_BASE_URL = 'https://api.tab-track.com';
 const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2NzM4MjQyNiwianRpIjoiODQyODVmZmUtZDVjYi00OGUxLTk1MDItMmY3NWY2NDI2NmE1IiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NjczODI0MjYsImV4cCI6MTc2OTk3NDQyNiwicm9sIjoiRWRpdG9yIn0.tx84js9-CPGmjLKVPtPeVhVMsQiRtCeNcfw4J4Q2hyc';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
 const formatMoney = n =>
   Number.isFinite(n)
     ? n.toLocaleString('es-MX', {
@@ -167,28 +167,7 @@ export default function EqualSplit() {
     const fetchSavedPeopleThenItems = async () => {
       let savedN = null;
 
-      try {
-        if (savedKey) {
-          const raw = await AsyncStorage.getItem(savedKey);
-          if (raw) {
-            const n = Number(raw);
-            if (!Number.isNaN(n) && n > 0) {
-              savedN = n;
-              if (mounted) {
-                setTotalComensales(n);
-                setPeopleInput(String(n));
-              }
-            }
-          }
-        }
-      } catch (e) {
-        console.warn(
-          'EqualSplit: error reading saved people from AsyncStorage',
-          e,
-        );
-      }
-
-      if (savedN == null && saleId) {
+      if (saleId) {
         try {
           const base = API_BASE_URL.replace(/\/$/, '');
           const url = `${base}/api/mesas/comensales/${encodeURIComponent(
@@ -226,12 +205,36 @@ export default function EqualSplit() {
           }
         } catch (err) {
           console.warn(
-            'EqualSplit: error fetching saved comensales from server',
+            'EqualSplit: error fetching saved comensales from server (fallback to local)',
             err,
           );
         }
       }
 
+      if (savedN == null) {
+        try {
+          if (savedKey) {
+            const raw = await AsyncStorage.getItem(savedKey);
+            if (raw) {
+              const n = Number(raw);
+              if (!Number.isNaN(n) && n > 0) {
+                savedN = n;
+                if (mounted) {
+                  setTotalComensales(n);
+                  setPeopleInput(String(n));
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn(
+            'EqualSplit: error reading saved people from AsyncStorage',
+            e,
+          );
+        }
+      }
+
+      // Now load items if needed (same logic as before)
       if (items && Array.isArray(items) && items.length > 0) {
         // nothing
       } else {
@@ -331,41 +334,6 @@ export default function EqualSplit() {
   const perPersonStr = formatMoney(perPersonTotalWithTip);
   const totalStr = formatMoney(total);
   const totalFont = totalFontSizeFor(totalStr);
-
-  const headerGradientPaddingH = Math.round(sidePad);
-  const contentWidth = Math.round(Math.min(width - Math.round(wp(8)), 720));
-  const modalWidth = Math.round(Math.min(width - 48, 360));
-  const logoSize = Math.round(clamp(rf(12), 64, 140));
-
-  const styles = useMemo(
-    () =>
-      makeStyles({
-        wp,
-        hp,
-        rf,
-        clamp,
-        width,
-        height,
-        contentWidth,
-        modalWidth,
-        logoSize,
-        sidePad,
-        isNarrow,
-      }),
-    [
-      wp,
-      hp,
-      rf,
-      clamp,
-      width,
-      height,
-      contentWidth,
-      modalWidth,
-      logoSize,
-      sidePad,
-      isNarrow,
-    ],
-  );
 
   if (loading || !items) {
     return (
@@ -588,6 +556,41 @@ export default function EqualSplit() {
     setTotalComensales(1);
   };
 
+  const headerGradientPaddingH = Math.round(sidePad);
+  const contentWidth = Math.round(Math.min(width - Math.round(wp(8)), 720));
+  const modalWidth = Math.round(Math.min(width - 48, 360));
+  const logoSize = Math.round(clamp(rf(12), 64, 140));
+
+  const styles = useMemo(
+    () =>
+      makeStyles({
+        wp,
+        hp,
+        rf,
+        clamp,
+        width,
+        height,
+        contentWidth,
+        modalWidth,
+        logoSize,
+        sidePad,
+        isNarrow,
+      }),
+    [
+      wp,
+      hp,
+      rf,
+      clamp,
+      width,
+      height,
+      contentWidth,
+      modalWidth,
+      logoSize,
+      sidePad,
+      isNarrow,
+    ],
+  );
+
   return (
     <SafeAreaView style={[styles.safe, {paddingTop: topSafe}]}>
       <StatusBar
@@ -672,9 +675,29 @@ export default function EqualSplit() {
 
               <View style={styles.rightThanks}>
                 <Text style={styles.thanksText}>Se divide entre</Text>
-                <Text style={styles.thanksSub}>
-                  {people} {people === 1 ? 'persona' : 'personas'}
-                </Text>
+
+                <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                  <Text style={styles.thanksSub}>
+                    {people} {people === 1 ? 'persona' : 'personas'}
+                  </Text>
+
+                  <TouchableOpacity
+                    onPress={() => {
+                      const curr = totalComensales ?? people;
+                      setPeopleInput(String(curr));
+                      setShowPeopleModal(true);
+                    }}
+                    hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+                    style={{marginLeft: 8}}>
+                    <Text
+                      style={{
+                        fontSize: Math.round(clamp(rf(3.4), 14, 18)),
+                        color: 'rgba(255,255,255,0.95)',
+                      }}>
+                      ✏️
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
           </View>
@@ -737,26 +760,15 @@ export default function EqualSplit() {
             </Text>
           </View>
 
-          <View style={[styles.totalsRow, {marginTop: Math.round(hp(0.6))}]}>
+          {/*           <View style={[styles.totalsRow, { marginTop: Math.round(hp(0.6)) }]}>
             <Text style={styles.totLabel}>Propina</Text>
             <Text style={styles.totValue}>{formatMoney(tipAmount)} MXN</Text>
           </View>
 
-          <View style={[styles.totalsRow, {marginTop: Math.round(hp(0.4))}]}>
-            <Text style={[styles.totLabel, {fontWeight: '800'}]}>
-              Total con propina
-            </Text>
-            <Text
-              style={[
-                styles.totValue,
-                {
-                  fontWeight: '900',
-                  fontSize: Math.round(clamp(rf(4.6), 14, 20)),
-                },
-              ]}>
-              {formatMoney(totalWithTip)} MXN
-            </Text>
-          </View>
+          <View style={[styles.totalsRow, { marginTop: Math.round(hp(0.4)) }]}>
+            <Text style={[styles.totLabel, { fontWeight:'800' }]}>Total con propina</Text>
+            <Text style={[styles.totValue, { fontWeight:'900', fontSize: Math.round(clamp(rf(4.6), 14, 20)) }]}>{formatMoney(totalWithTip)} MXN</Text>
+          </View> */}
 
           <View
             style={[
@@ -785,34 +797,23 @@ export default function EqualSplit() {
               {perPersonStr} MXN
             </Text>
           </View>
-
           <TouchableOpacity
-            style={styles.secondaryButton}
+            style={styles.primaryButton}
             onPress={goToPropina}
             activeOpacity={0.9}
             hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-            <Text style={styles.secondaryButtonText}>
-              {hasTipApplied ? 'Añadir/editar propina' : 'Añadir propina'}
+            <Text style={styles.primaryButtonText}>
+              {hasTipApplied ? 'Añadir/editar propina' : 'Pagar'}
             </Text>
           </TouchableOpacity>
 
-          <View style={styles.buttonsWrap}>
-            <TouchableOpacity
-              style={styles.primaryButton}
-              onPress={handlePay}
-              activeOpacity={0.9}
-              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-              <Text style={styles.primaryButtonText}>Pagar</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.ghostButton}
-              onPress={() => navigation.navigate('Dividir', {token})}
-              activeOpacity={0.9}
-              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-              <Text style={styles.ghostButtonText}>Volver</Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity
+            style={styles.ghostButton}
+            onPress={() => navigation.navigate('Escanear', {token})}
+            activeOpacity={0.9}
+            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+            <Text style={styles.ghostButtonText}>Volver</Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
 
@@ -835,6 +836,7 @@ export default function EqualSplit() {
               style={{
                 fontSize: Math.round(clamp(rf(4.6), 16, 20)),
                 fontWeight: '800',
+                color: '#000',
                 marginBottom: Math.round(hp(0.6)),
               }}>
               ¿Entre cuántas personas?
@@ -854,6 +856,7 @@ export default function EqualSplit() {
                 borderColor: '#e5e7eb',
                 borderRadius: 8,
                 padding: Math.round(wp(3)),
+                color: '#000',
                 marginBottom: Math.round(hp(1)),
                 fontSize: Math.round(clamp(rf(4), 14, 18)),
               }}
@@ -953,9 +956,9 @@ function makeStyles({
     container: {alignItems: 'center', paddingBottom: Math.round(hp(3))},
 
     headerGradient: {
-      height: 220,
+      height: 200,
       width: '100%',
-      borderBottomRightRadius: 52,
+      borderBottomRightRadius: 42,
       overflow: 'hidden',
     },
 

@@ -499,14 +499,7 @@ export default function OneExhibicion() {
             style={styles.primaryButton}
             onPress={goToPropina}
             activeOpacity={0.9}>
-            <Text style={styles.primaryButtonText}>Añadir/editar propina</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.ghostButton}
-            onPress={handlePay}
-            activeOpacity={0.9}>
-            <Text style={styles.ghostButtonText}>Pagar</Text>
+            <Text style={styles.primaryButtonText}>Pagar</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>

@@ -94,9 +94,15 @@ export default function Propina() {
       ? String(initialPercent)
       : '';
 
-  const [selectedPercent, setSelectedPercent] = useState(initialPercent);
+  const DEFAULT_PERCENT = 15;
+
+  const [selectedPercent, setSelectedPercent] = useState(
+    initialPercent ?? DEFAULT_PERCENT,
+  );
+
   const [otherPercent, setOtherPercent] = useState(initialOther);
-  const [customActive, setCustomActive] = useState(Boolean(initialOther));
+  const [customActive, setCustomActive] = useState(false);
+
   const [hasAppliedBefore, setHasAppliedBefore] = useState(
     Boolean(incomingTipApplied),
   );
@@ -319,8 +325,8 @@ export default function Propina() {
         subtotal: perPersonSubtotal,
         iva: perPersonIva,
         tipAmount: perPersonTipAmount,
-        total: perPersonTotalWithTip,
-        totalWithTip: perPersonTotalWithTip,
+        total: perPersonTotal, // <-- FIX: base total (no tip)
+        totalWithTip: perPersonTotalWithTip, // <-- keep: total including tip
         people: 1,
         groupPeople: peopleCount,
         tipPercent: percent,
@@ -385,36 +391,6 @@ export default function Propina() {
   const btnPaddingHorizontal = clampBtn(rfBtn(18), 10, 28);
   const btnTextSize = clampBtn(rfBtn(16), 12, 20);
   const btnMinHeight = rfBtn(46);
-
-  useEffect(() => {
-    const parent = navigation.getParent?.();
-    if (!parent) return undefined;
-    try {
-      parent.setOptions?.({
-        tabBarStyle: {
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          elevation: 8,
-        },
-        tabBarHideOnKeyboard: false,
-      });
-    } catch (e) {
-      // ignore
-    }
-    return () => {
-      try {
-        parent.setOptions?.({
-          tabBarStyle: undefined,
-          tabBarHideOnKeyboard: undefined,
-        });
-      } catch (e) {
-        /* noop */
-      }
-    };
-  }, [navigation]);
-  // --------------------------------------------------------
 
   return (
     <SafeAreaView
@@ -515,9 +491,7 @@ export default function Propina() {
                   styles.totalLabel,
                   {fontSize: clampLocal(rf(13), 12, 18)},
                 ]}>
-                {comingFromEqualSplit && peopleCount > 1
-                  ? 'Total (por persona)'
-                  : 'Total'}
+                {comingFromEqualSplit && peopleCount > 1 ? 'Total' : 'Total'}
               </Text>
               <View style={styles.totalRow}>
                 <Text
@@ -583,10 +557,18 @@ export default function Propina() {
                     {paddingVertical: clampLocal(Math.round(rf(12)), 8, 16)},
                   ]}
                   onPress={() => {
+                    setHasAppliedBefore(true);
+
+                    // If tapping the same percent again → turn it OFF
+                    if (!customActive && selectedPercent === p) {
+                      setSelectedPercent(null);
+                      return;
+                    }
+
+                    // Otherwise → activate this percent
                     setCustomActive(false);
                     setOtherPercent('');
                     setSelectedPercent(p);
-                    setHasAppliedBefore(true);
                   }}
                   hitSlop={{top: 8, left: 8, right: 8, bottom: 8}}>
                   <View

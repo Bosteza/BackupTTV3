@@ -25,7 +25,7 @@ const VISITS_STORAGE_KEY = 'user_visits';
 
 const API_BASE_URL = 'https://api.tab-track.com';
 const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2NzM4MjQyNiwianRpIjoiODQyODVmZmUtZDVjYi00OGUxLTk1MDItMmY3NWY2NDI2NmE1IiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NjczODI0MjYsImV4cCI6MTc2OTk3NDQyNiwicm9sIjoiRWRpdG9yIn0.tx84js9-CPGmjLKVPtPeVhVMsQiRtCeNcfw4J4Q2hyc';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
 
 const WHATSAPP_URL_DIRECT =
   'https://api.whatsapp.com/send?phone=5214611011391&text=%C2%A1Hola!%20Quiero%20m%C3%A1s%20informaci%C3%B3n%20de%20';
@@ -110,8 +110,7 @@ function useResponsive() {
     if (!p) return 0;
     return Math.round((p / 100) * width);
   };
-
-  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
   return {width, height, wp, hp, rf, clamp};
 }
@@ -121,8 +120,7 @@ export default function DetailScreen({navigation, route}) {
   const {width, wp, hp, rf, clamp} = useResponsive(); // RESPONSIVE hook
 
   const [showNotifications, setShowNotifications] = useState(false);
-  const {notifications, dispatch} = useNotifications();
-
+  const {notifications, unreadCount, markAllRead} = useNotifications();
   const [visit, setVisit] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -687,11 +685,6 @@ export default function DetailScreen({navigation, route}) {
     }
   };
 
-  const unreadCount = notifications.filter(n => !n.read).length;
-  const markAllRead = () => {
-    dispatch({type: 'MARK_ALL_READ'});
-  };
-
   if (loading) {
     return (
       <SafeAreaView
@@ -721,6 +714,61 @@ export default function DetailScreen({navigation, route}) {
               paddingVertical: Math.max(10, hp(1.6)),
             },
           ]}>
+          {' '}
+          {/* Modal de notificaciones */}
+          <Modal visible={showNotifications} transparent animationType="slide">
+            <View style={styles.modalOverlay}>
+              <View style={[styles.modalBox, {width: modalWidth}]}>
+                <View style={styles.modalHeader}>
+                  <Text
+                    style={[
+                      styles.modalTitle,
+                      {fontSize: clamp(rf(3.8), 16, 20)},
+                    ]}>
+                    Notificaciones
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setShowNotifications(false)}
+                    hitSlop={{top: 8, left: 8, right: 8, bottom: 8}}>
+                    <Ionicons name="close" size={iconSize} color="#333" />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.modalListHeader}>
+                  <Text style={styles.modalListHeaderText}>
+                    Últimas notificaciones
+                  </Text>
+                </View>
+
+                <ScrollView
+                  style={[
+                    styles.modalList,
+                    {maxHeight: Math.round(Math.min(hp(60), 420))},
+                  ]}>
+                  {notifications && notifications.length > 0 ? (
+                    notifications.map(n => <NotificationRow key={n.id} n={n} />)
+                  ) : (
+                    <View style={styles.noNotifications}>
+                      <Text style={styles.noNotificationsText}>
+                        No hay notificaciones nuevas.
+                      </Text>
+                    </View>
+                  )}
+                </ScrollView>
+
+                <TouchableOpacity
+                  style={[styles.markReadButton, {margin: basePadding}]}
+                  onPress={markAllRead}>
+                  <Text
+                    style={[
+                      styles.markReadText,
+                      {fontSize: clamp(rf(3.6), 13, 16)},
+                    ]}>
+                    Marcar todo como leído
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
           <TouchableOpacity
             onPress={() => navigation.goBack()}
             hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
@@ -835,7 +883,10 @@ export default function DetailScreen({navigation, route}) {
   const itemFont = clamp(rf(2.8), 12, 16);
   const itemPriceFont = clamp(rf(3), 12, 16);
   const btnPaddingVert = Math.max(8, hp(1.2));
-  const modalWidth = Math.min(Math.max(wp(90), 300), 920);
+  const modalWidth = Math.min(width * 0.92, 720);
+
+  const basePadding = clamp(Math.round(width * 0.04), 10, 28);
+  const iconSize = Math.round(clamp(rf(2.6), 19, 32));
 
   return (
     <SafeAreaView
@@ -869,28 +920,28 @@ export default function DetailScreen({navigation, route}) {
             </View>
             <ScrollView
               style={[styles.modalList, {maxHeight: Math.round(hp(40))}]}>
-              {notifications.map(n => (
-                <View
-                  key={n.id}
-                  style={[
-                    styles.notificationItem,
-                    n.read ? styles.read : styles.unread,
-                  ]}>
-                  <Text
-                    style={[
-                      styles.notificationText,
-                      {fontSize: clamp(rf(2.8), 12, 16)},
-                    ]}>
-                    {n.text}
+              {notifications && notifications.length > 0 ? (
+                notifications.map(n => <NotificationRow key={n.id} n={n} />)
+              ) : (
+                <View style={styles.noNotifications}>
+                  <Text style={styles.noNotificationsText}>
+                    No hay notificaciones nuevas.
                   </Text>
                 </View>
-              ))}
+              )}
             </ScrollView>
-            <Button
-              title="Marcar todo como leído"
-              onPress={markAllRead}
-              color={'#0046ff'}
-            />
+
+            <TouchableOpacity
+              style={[styles.markReadButton, {margin: basePadding}]}
+              onPress={markAllRead}>
+              <Text
+                style={[
+                  styles.markReadText,
+                  {fontSize: clamp(rf(3.6), 13, 16)},
+                ]}>
+                Marcar todo como leído
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -899,7 +950,7 @@ export default function DetailScreen({navigation, route}) {
         style={[
           styles.header,
           {
-            paddingHorizontal: Math.max(12, wp(4)),
+            paddingHorizontal: basePadding,
             paddingVertical: Math.max(10, hp(1.6)),
           },
         ]}>
@@ -915,18 +966,24 @@ export default function DetailScreen({navigation, route}) {
         <Text style={[styles.headerTitle, {fontSize: clamp(rf(4.0), 18, 24)}]}>
           Experiencias
         </Text>
-        <View style={styles.headerIcons}>
+        <View style={styles.headerRight}>
           <TouchableOpacity
             onPress={() => setShowNotifications(true)}
             style={[styles.headerButton, {marginLeft: 16}]}>
             <Ionicons
               name="notifications-outline"
-              size={clamp(rf(3.6), 20, 28)}
+              size={30}
               color="#0051c9"
-            />
+              hitSlop={{top: 8, left: 8, right: 8, bottom: 8}}></Ionicons>
             {unreadCount > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{unreadCount}</Text>
+              <View style={[styles.badge, {right: 5, top: 1}]}>
+                <Text
+                  style={[
+                    styles.badgeText,
+                    {fontSize: clamp(rf(2.6), 15, 20)},
+                  ]}>
+                  {unreadCount}
+                </Text>
               </View>
             )}
           </TouchableOpacity>
@@ -1204,23 +1261,70 @@ export default function DetailScreen({navigation, route}) {
     </SafeAreaView>
   );
 }
+function NotificationRow({n}) {
+  const dateLabel = n.date
+    ? new Date(n.date).toLocaleString('es-MX', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      })
+    : '';
+
+  return (
+    <View
+      style={[
+        styles.notificationItemLarge,
+        n.read ? styles.readCard : styles.unreadCard,
+      ]}>
+      <View style={styles.notLeft}>
+        <Text style={styles.notBranch} numberOfLines={1}>
+          {n.branch || `Venta ${n.saleId ?? ''}`}
+        </Text>
+        <Text style={styles.notDate}>{dateLabel}</Text>
+      </View>
+
+      <View style={styles.notRight}>
+        <Text style={styles.notAmount}>
+          {Number(n.amount || 0).toLocaleString('es-MX', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}
+        </Text>
+        <Text style={styles.notCurrency}>MXN</Text>
+      </View>
+    </View>
+  );
+}
 
 const BLUE = '#0046ff';
 const styles = StyleSheet.create({
   container: {flex: 1, backgroundColor: '#fff'},
   header: {
+    marginTop: 8,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     borderBottomWidth: 1,
     borderBottomColor: BLUE,
-    justifyContent: 'space-between',
   },
-  headerTitle: {fontWeight: '600', color: BLUE},
-  headerIcons: {flexDirection: 'row', alignItems: 'center'},
-  logo: {resizeMode: 'contain'},
-  scrollContent: {
-    /* padding dinamico desde JSX */
+  headerButton: {padding: 0, top: -1, right: 10},
+  headerTitle: {
+    fontWeight: '700',
+    color: '#0046ff',
+    textAlign: 'center',
+    flex: 1,
+    fontFamily: 'Montserrat-Bold',
+    left: 20,
   },
+  headerRight: {flexDirection: 'row', alignItems: 'center'},
+  logoFull: {width: 32, height: 32, marginRight: 8, resizeMode: 'contain'},
+  badge: {
+    position: 'absolute',
+    backgroundColor: '#ff3b30',
+    borderRadius: 15,
+    paddingHorizontal: 5,
+    paddingVertical: 0,
+  },
+  badgeText: {color: '#fff', fontSize: 10},
   sectionHeading: {fontWeight: '600', color: BLUE, marginBottom: 16},
   totalRow: {flexDirection: 'row', alignItems: 'center', marginBottom: 16},
   totalLogoWrapper: {
@@ -1280,8 +1384,8 @@ const styles = StyleSheet.create({
     top: 2,
     right: 2,
     backgroundColor: '#ff3b30',
-    borderRadius: 8,
-    paddingHorizontal: 4,
+    borderRadius: 10,
+    paddingHorizontal: 6,
     paddingVertical: 1,
   },
   badgeText: {color: '#fff', fontSize: 10},
@@ -1310,4 +1414,162 @@ const styles = StyleSheet.create({
   notificationText: {color: '#333'},
   unread: {backgroundColor: '#eef5ff'},
   read: {backgroundColor: '#fff'},
+
+  modalListHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderColor: '#eee',
+  },
+
+  modalListHeaderText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#333',
+  },
+
+  markAllText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0046ff',
+  },
+  notificationCard: {
+    padding: 14,
+    marginVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e6e6e6',
+  },
+
+  notificationUnread: {
+    backgroundColor: '#eef5ff',
+  },
+
+  notificationRead: {
+    backgroundColor: '#fff',
+  },
+
+  notificationCardText: {
+    fontSize: 14,
+    color: '#333',
+  },
+
+  notificationItemLarge: {
+    flexDirection: 'row',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#eef3ff',
+    backgroundColor: '#fff',
+  },
+
+  unreadCard: {
+    backgroundColor: '#f2f8ff',
+    borderColor: '#d7e8ff',
+  },
+
+  readCard: {
+    backgroundColor: '#ffffff',
+    borderColor: '#f0f0f0',
+  },
+
+  notLeft: {
+    flex: 1,
+    paddingRight: 8,
+  },
+
+  notRight: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+
+  notBranch: {
+    fontWeight: '800',
+    fontSize: 14,
+    color: '#111',
+    marginBottom: 2,
+  },
+
+  notSale: {
+    color: '#666',
+    fontSize: 12,
+    marginBottom: 2,
+  },
+
+  notDate: {
+    color: '#888',
+    fontSize: 11,
+  },
+
+  notAmount: {
+    fontWeight: '900',
+    fontSize: 16,
+    color: '#0b58ff',
+  },
+
+  notCurrency: {
+    color: '#666',
+    fontSize: 11,
+  },
+  markReadButton: {
+    padding: 12,
+    backgroundColor: '#0046ff',
+    alignItems: 'center',
+    margin: 16,
+    borderRadius: 8,
+  },
+  markReadText: {color: '#fff', fontWeight: '600'},
+  dateOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+
+  dateSheet: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 16,
+    width: '90%',
+    maxWidth: 360,
+    alignItems: 'center',
+  },
+
+  datePicker: {
+    width: '100%',
+  },
+
+  dateActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    width: '100%',
+  },
+
+  dateBtnSecondary: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+
+  dateBtnSecondaryText: {
+    color: '#666',
+    fontWeight: '600',
+  },
+
+  dateBtnPrimary: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+
+  dateBtnPrimaryText: {
+    color: '#0046ff',
+    fontWeight: '700',
+  },
 });

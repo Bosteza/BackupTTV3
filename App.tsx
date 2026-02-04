@@ -63,6 +63,13 @@ import TermsAndConditions from './src/screens/TermsAndConditions';
 import VerificationScreen from './src/screens/VerificacionScreen';
 import SendEmail from './src/screens/SendEmail';
 import ResetPassword from './src/screens/ResetPassword';
+import OpenPay from './src/screens/OpenPay';
+import {StripeProvider} from '@stripe/stripe-react-native';
+
+//Residence
+import CodeResidence from './src/screensRes/CodeResidence';
+import HomeResidence from './src/screensRes/HomeResidence';
+import SplashResidence from './src/screensRes/SplashResidence';
 
 const Stack = createNativeStackNavigator();
 
@@ -85,8 +92,14 @@ export default function App() {
           <Stack.Screen name="SendEmail" component={SendEmail} />
           <Stack.Screen name="ResetPassword" component={ResetPassword} />
 
+          {/* Auth screens Residence */}
+
+          <Stack.Screen name="CodeResidence" component={CodeResidence} />
+          <Stack.Screen name="SplashResidence" component={SplashResidence} />
+
           {/* Main app con barra */}
           <Stack.Screen name="Home" component={Home} />
+          <Stack.Screen name="HomeResidence" component={HomeResidence} />
         </Stack.Navigator>
       </NavigationContainer>
     </NotificationProvider>

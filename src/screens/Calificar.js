@@ -45,8 +45,8 @@ export default function CalificarScreen({navigation}) {
     '¿Qué te parecio la calidad del servicio?',
     '¿Cómo calificarias la relacion precio/calidad?',
     '¿Qué tan comodo y agradable te parecio el ambiente del restaurante (limpieza/música/iluminación/temperatura/mobiliario?',
-    '¿Cómo calificarias tu experiencia en general en el restaurante?',
-    '¿Qué tanto recomendarias este lugar con algun conocido?',
+    '¿Cómo calificarías tu experiencia en general en el restaurante?',
+    '¿Qué tanto recomendarías este lugar con algun conocido?',
   ];
   const [ratings, setRatings] = useState(Array(questions.length).fill(0));
   const setRating = (qIndex, star) => {
