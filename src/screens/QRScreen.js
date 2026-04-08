@@ -1,3 +1,4 @@
+//Post fixes 9 m
 import React, {useEffect, useState, useRef, useCallback} from 'react';
 import {
   View,
@@ -32,7 +33,7 @@ const camWarn = (...a) => console.warn('[QR][CAM][WARN]', ...a);
 
 const API_BASE_FALLBACK = 'https://api.tab-track.com';
 const API_TOKEN_FALLBACK =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const STORAGE_KEYS = {
   API_HOST: 'api_host',
@@ -323,7 +324,7 @@ export default function QRScreen({navigation}) {
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
   const [hasPermission, setHasPermission] = useState(false);
-
+  const [scannerActive, setScannerActive] = useState(true);
   const [flashEnabled, setFlashEnabled] = useState(false);
   const [allowScan, setAllowScan] = useState(false);
   const [allowScanForStatus, setAllowScanForStatus] = useState(false);
@@ -338,9 +339,9 @@ export default function QRScreen({navigation}) {
 
   // UI config
   const baseHeader = 56;
-  const headerHeight = clamp(rf(baseHeader), 48, 110);
+
   const qrSize = Math.min(Math.round(width * 0.68), clamp(360, 220, 500));
-  const holeTop = headerHeight + clamp(rf(64), 72, 140);
+
   const holeLeft = Math.round((width - qrSize) / 2);
   const cornerArc = clamp(64, 40, 96);
   const cornerThickness = Math.max(8, Math.round((width / 375) * 10));
@@ -351,16 +352,24 @@ export default function QRScreen({navigation}) {
   const logoMaxWidth = Math.round(Math.min(160, width * 0.36));
   const logoWidth = Math.min(logoMaxWidth, Math.round(qrSize * 0.38));
   const logoHeight = Math.round(logoWidth * 0.5);
-  const logoTopPos = Math.max(
-    12,
-    holeTop - logoHeight - Math.round(logoHeight * 0.35),
-  );
+
   // ---------------------------------------------------
 
-  const CAMERA_HEIGHT = Math.max(
-    height - headerHeight - insets.bottom - 16,
-    Math.round(height * 0.6),
+  // geometry
+  const headerContentHeight = clamp(rf(56), 48, 110);
+  const headerHeight = headerContentHeight + insets.top; // includes notch area
+
+  const holeTop = headerHeight + clamp(rf(90), 100, 180) + 30;
+  // Place logo centered BETWEEN topbar and QR top
+  const gapTop = headerHeight;
+  const gapBottom = holeTop;
+  const logoTopPos = clamp(
+    Math.round(gapTop + (gapBottom - gapTop - logoHeight) / 2),
+    gapTop + 6,
+    gapBottom - logoHeight - 6,
   );
+
+  // keep holeTop relative to full header height
 
   // Cámara – solo iOS
   useEffect(() => {
@@ -388,8 +397,19 @@ export default function QRScreen({navigation}) {
   useFocusEffect(
     useCallback(() => {
       camLog('screen focused → reset scan flags');
+      setScannerActive(true);
       setAllowScan(false);
       setAllowScanForStatus(false);
+      setTimeout(() => {
+        try {
+          if (
+            scannerRef?.current &&
+            typeof scannerRef.current.reactivate === 'function'
+          ) {
+            scannerRef.current.reactivate();
+          }
+        } catch (err) {}
+      }, 300);
 
       return () => {
         setAllowScan(false);
@@ -402,15 +422,23 @@ export default function QRScreen({navigation}) {
     }, []),
   );
 
-  const startManualScan = () => {
-    setAllowScan(true);
-    setAllowScanForStatus(false);
+  const reactivateScanner = (allow = false) => {
+    setScannerActive(true);
+    if (allow) setAllowScan(true);
+    setTimeout(() => {
+      try {
+        if (
+          scannerRef?.current &&
+          typeof scannerRef.current.reactivate === 'function'
+        ) {
+          scannerRef.current.reactivate();
+        }
+      } catch (err) {}
+    }, 250);
   };
 
-  const toggleFlash = () => {
-    camLog('toggleFlash()');
-    setFlashEnabled(prev => !prev);
-  };
+  const startManualScan = () => reactivateScanner(true);
+  const toggleFlash = () => setFlashEnabled(p => !p);
 
   const showStatusModal = (resultObj, token = null, loading = false) => {
     if (statusTimeoutRef.current) {
@@ -428,25 +456,38 @@ export default function QRScreen({navigation}) {
     setStatusResult(null);
     setStatusToken(null);
     setStatusLoading(false);
-
+    setScannerActive(true);
     setAllowScan(false);
     setAllowScanForStatus(false);
+    setTimeout(() => {
+      try {
+        if (
+          scannerRef?.current &&
+          typeof scannerRef.current.reactivate === 'function'
+        ) {
+          scannerRef.current.reactivate();
+        }
+      } catch (err) {}
+    }, 300);
   };
 
   const onStatusPress = () => {
-    setAllowScan(false);
     setAllowScanForStatus(true);
-
     showStatusModal(
       {ok: null, message: 'Apunta la cámara al QR para verificar la mesa...'},
       null,
       true,
     );
 
-    if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+    reactivateScanner(false);
 
+    if (statusTimeoutRef.current) {
+      clearTimeout(statusTimeoutRef.current);
+      statusTimeoutRef.current = null;
+    }
     statusTimeoutRef.current = setTimeout(() => {
       setAllowScanForStatus(false);
+      setScannerActive(true);
       showStatusModal(
         {
           ok: false,
@@ -540,25 +581,15 @@ export default function QRScreen({navigation}) {
       );
     }
   };
-
-  // Lógica que se usaba antes en onSuccess (reutilizada)
   const onSuccess = async e => {
-    camLog('QR read flags', {allowScan, allowScanForStatus});
+    if (!allowScan && !allowScanForStatus) return;
 
-    if (!allowScan && !allowScanForStatus) {
-      camLog('read ignored (no scanning allowed)');
-      return;
-    }
+    setAllowScan(false);
+    setAllowScanForStatus(false);
+    setScannerActive(false);
 
     const raw = e?.data ?? '';
     const token = extractTokenFromRaw(raw);
-
-    camLog('RAW QR', raw);
-    camLog('TOKEN', token);
-
-    // stop scanning after we capture one QR
-    setAllowScan(false);
-    setAllowScanForStatus(false);
 
     if (!token) {
       setStatusResult({
@@ -567,6 +598,8 @@ export default function QRScreen({navigation}) {
       });
       setStatusLoading(false);
       setStatusModalVisible(true);
+
+      setTimeout(() => reactivateScanner(true), 900);
       return;
     }
 
@@ -581,7 +614,6 @@ export default function QRScreen({navigation}) {
 
     navigation.navigate('Escanear', {token});
   };
-
   // Handler que recibe el evento desde el componente nativo
   const handleNativeQRRead = event => {
     const scanningEnabled = allowScan || allowScanForStatus;
@@ -597,7 +629,6 @@ export default function QRScreen({navigation}) {
         isHandlingScanRef.current = false;
       });
   };
-
   if (!hasPermission) {
     return (
       <View style={[styles.loading, {backgroundColor: '#000'}]}>
@@ -609,7 +640,7 @@ export default function QRScreen({navigation}) {
   const buttonsTop = holeTop + qrSize + clamp(rf(48), 80, 160);
 
   return (
-    <SafeAreaView style={{flex: 1, backgroundColor: '#000'}}>
+    <View style={{flex: 1, backgroundColor: '#000'}}>
       {isFocused && (
         <StatusBar
           barStyle="light-content"
@@ -617,20 +648,170 @@ export default function QRScreen({navigation}) {
           backgroundColor="transparent"
         />
       )}
-      {/* Header */}
-      <View style={[styles.header, {height: headerHeight}]}>
+
+      {/* ONE camera only */}
+      <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+        <IOSQRScannerMother
+          style={StyleSheet.absoluteFill}
+          torchEnabled={flashEnabled}
+          scanningEnabled={scanningEnabled}
+          onQRCodeRead={handleNativeQRRead}
+        />
+      </View>
+
+      {/* ONE overlay only */}
+      <View
+        pointerEvents="none"
+        style={[styles.overlay, StyleSheet.absoluteFill]}>
+        {/* top dark area */}
+        <View
+          style={[
+            styles.overlayRow,
+            {height: holeTop, backgroundColor: `rgba(0,0,0,${overlayAlpha})`},
+          ]}
+        />
+
+        {/* middle row: left mask + hole + right mask */}
+        {/* logo */}
+        <View
+          style={{
+            position: 'absolute',
+            top: logoTopPos,
+            left: 0,
+            right: 0,
+            alignItems: 'center',
+            zIndex: 999,
+            pointerEvents: 'none',
+          }}>
+          <Image
+            source={require('../../assets/images/logo2.png')}
+            style={{
+              width: logoWidth,
+              height: logoHeight,
+              resizeMode: 'contain',
+              shadowColor: '#000',
+              shadowOffset: {width: 0, height: 2},
+              shadowOpacity: 0.12,
+              shadowRadius: 4,
+              elevation: 40,
+            }}
+          />
+        </View>
+        <View style={{flexDirection: 'row'}}>
+          <View
+            style={[
+              styles.overlayCol,
+              {width: holeLeft, backgroundColor: `rgba(0,0,0,${overlayAlpha})`},
+            ]}
+          />
+
+          <View style={[styles.hole, {width: qrSize, height: qrSize}]}>
+            <View
+              style={{
+                position: 'absolute',
+                width: qrSize - 8,
+                height: qrSize - 8,
+                borderRadius: cornerOuterRadius,
+                backgroundColor: `rgba(255,255,255,${innerPanelOpacity})`,
+                zIndex: 3,
+              }}
+            />
+
+            {/* esquinas */}
+            <View
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: cornerArc,
+                height: cornerArc,
+                borderTopWidth: cornerThickness,
+                borderLeftWidth: cornerThickness,
+                borderColor: '#fff',
+                borderTopLeftRadius: cornerOuterRadius,
+                zIndex: 10,
+                backgroundColor: 'transparent',
+              }}
+            />
+            <View
+              style={{
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                width: cornerArc,
+                height: cornerArc,
+                borderTopWidth: cornerThickness,
+                borderRightWidth: cornerThickness,
+                borderColor: '#fff',
+                borderTopRightRadius: cornerOuterRadius,
+                zIndex: 10,
+                backgroundColor: 'transparent',
+              }}
+            />
+            <View
+              style={{
+                position: 'absolute',
+                bottom: 0,
+                left: 0,
+                width: cornerArc,
+                height: cornerArc,
+                borderBottomWidth: cornerThickness,
+                borderLeftWidth: cornerThickness,
+                borderColor: '#fff',
+                borderBottomLeftRadius: cornerOuterRadius,
+                zIndex: 10,
+                backgroundColor: 'transparent',
+              }}
+            />
+            <View
+              style={{
+                position: 'absolute',
+                bottom: 0,
+                right: 0,
+                width: cornerArc,
+                height: cornerArc,
+                borderBottomWidth: cornerThickness,
+                borderRightWidth: cornerThickness,
+                borderColor: '#fff',
+                borderBottomRightRadius: cornerOuterRadius,
+                zIndex: 10,
+                backgroundColor: 'transparent',
+              }}
+            />
+          </View>
+
+          <View
+            style={[
+              styles.overlayCol,
+              {width: holeLeft, backgroundColor: `rgba(0,0,0,${overlayAlpha})`},
+            ]}
+          />
+        </View>
+
+        {/* bottom dark area */}
+        <View
+          style={[
+            styles.overlayRow,
+            {flex: 1, backgroundColor: `rgba(0,0,0,${overlayAlpha})`},
+          ]}
+        />
+      </View>
+
+      {/* Header over camera */}
+      <View
+        style={[styles.header, {height: headerHeight, paddingTop: insets.top}]}>
         <TouchableOpacity
           onPress={openWhatsApp}
           style={styles.iconBtn}
           activeOpacity={0.8}>
           <MaterialCommunityIcons
             name="face-agent"
-            size={rf(22)}
-            color="#0046ff"
+            size={rf(26)}
+            color="#ffff"
           />
         </TouchableOpacity>
 
-        <Text style={[styles.headerTitle, {fontSize: clamp(rf(18), 14, 22)}]}>
+        <Text style={[styles.headerTitle, {fontSize: clamp(rf(18), 20, 22)}]}>
           Escanear QR
         </Text>
 
@@ -640,230 +821,80 @@ export default function QRScreen({navigation}) {
           activeOpacity={1}>
           <Ionicons
             name={flashEnabled ? 'flashlight' : 'flashlight-outline'}
-            size={rf(22)}
-            color="#0046ff"
+            size={rf(26)}
+            color="#ffff"
           />
         </TouchableOpacity>
       </View>
 
-      {/* Cámara */}
-      <View style={[styles.cameraWrapper, {height: CAMERA_HEIGHT}]}>
-        <IOSQRScannerMother
-          style={[styles.camera, {height: CAMERA_HEIGHT}]}
-          torchEnabled={flashEnabled}
-          scanningEnabled={scanningEnabled}
-          onQRCodeRead={handleNativeQRRead}
-        />
-        {/* Overlay (hueco para QR) */}
-        <View style={[styles.overlay, {height: CAMERA_HEIGHT}]}>
-          <View
-            style={[
-              styles.overlayRow,
-              {height: holeTop, backgroundColor: `rgba(0,0,0,${overlayAlpha})`},
-            ]}
-          />
-
-          {/* --- LOGO overlay --- */}
-          <View
-            style={{
-              position: 'absolute',
-              top: logoTopPos,
-              left: 0,
-              right: 0,
-              alignItems: 'center',
-              zIndex: 999,
-              pointerEvents: 'none',
-            }}>
-            <Image
-              source={require('../../assets/images/logo2.png')}
-              style={{
-                width: logoWidth,
-                height: logoHeight,
-                resizeMode: 'contain',
-                shadowColor: '#000',
-                shadowOffset: {width: 0, height: 2},
-                shadowOpacity: 0.12,
-                shadowRadius: 4,
-                elevation: 40,
-              }}
+      {/* Botones flotantes */}
+      <View
+        pointerEvents="box-none"
+        style={{
+          position: 'absolute',
+          top: buttonsTop,
+          left: 0,
+          width,
+          alignItems: 'center',
+          zIndex: 40,
+        }}>
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={startManualScan}
+          style={[
+            styles.floatPrimary,
+            {
+              width: Math.min(360, Math.round(width * 0.78)),
+              paddingVertical: clamp(rf(12), 10, 18),
+            },
+          ]}>
+          <View style={styles.actionContent}>
+            <Ionicons
+              name="qr-code-outline"
+              size={rf(18)}
+              color="#fff"
+              style={{marginRight: 12}}
             />
-          </View>
-          {/* -------------------- */}
-
-          <View style={{flexDirection: 'row'}}>
-            <View
+            <Text
               style={[
-                styles.overlayCol,
-                {
-                  width: holeLeft,
-                  backgroundColor: `rgba(0,0,0,${overlayAlpha})`,
-                },
-              ]}
-            />
-
-            <View style={[styles.hole, {width: qrSize, height: qrSize}]}>
-              <View
-                style={{
-                  position: 'absolute',
-                  width: qrSize - 8,
-                  height: qrSize - 8,
-                  borderRadius: cornerOuterRadius,
-                  backgroundColor: `rgba(255,255,255,${innerPanelOpacity})`,
-                  zIndex: 3,
-                }}
-              />
-
-              {/* esquinas */}
-              <View
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: cornerArc,
-                  height: cornerArc,
-                  borderTopWidth: cornerThickness,
-                  borderLeftWidth: cornerThickness,
-                  borderColor: '#fff',
-                  borderTopLeftRadius: cornerOuterRadius,
-                  zIndex: 10,
-                  backgroundColor: 'transparent',
-                }}
-              />
-              <View
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  right: 0,
-                  width: cornerArc,
-                  height: cornerArc,
-                  borderTopWidth: cornerThickness,
-                  borderRightWidth: cornerThickness,
-                  borderColor: '#fff',
-                  borderTopRightRadius: cornerOuterRadius,
-                  zIndex: 10,
-                  backgroundColor: 'transparent',
-                }}
-              />
-              <View
-                style={{
-                  position: 'absolute',
-                  bottom: 0,
-                  left: 0,
-                  width: cornerArc,
-                  height: cornerArc,
-                  borderBottomWidth: cornerThickness,
-                  borderLeftWidth: cornerThickness,
-                  borderColor: '#fff',
-                  borderBottomLeftRadius: cornerOuterRadius,
-                  zIndex: 10,
-                  backgroundColor: 'transparent',
-                }}
-              />
-              <View
-                style={{
-                  position: 'absolute',
-                  bottom: 0,
-                  right: 0,
-                  width: cornerArc,
-                  height: cornerArc,
-                  borderBottomWidth: cornerThickness,
-                  borderRightWidth: cornerThickness,
-                  borderColor: '#fff',
-                  borderBottomRightRadius: cornerOuterRadius,
-                  zIndex: 10,
-                  backgroundColor: 'transparent',
-                }}
-              />
-            </View>
-
-            <View
-              style={[
-                styles.overlayCol,
-                {
-                  width: holeLeft,
-                  backgroundColor: `rgba(0,0,0,${overlayAlpha})`,
-                },
-              ]}
-            />
+                styles.primaryActionText,
+                {fontSize: clamp(rf(16), 14, 18)},
+              ]}>
+              Escanear QR
+            </Text>
           </View>
+        </TouchableOpacity>
 
-          <View
-            style={[
-              styles.overlayRow,
-              {flex: 1, backgroundColor: `rgba(0,0,0,${overlayAlpha})`},
-            ]}
-          />
-        </View>
-        {/* Botones flotantes */}
-        <View
-          pointerEvents="box-none"
-          style={{
-            position: 'absolute',
-            top: buttonsTop,
-            left: 0,
-            width,
-            alignItems: 'center',
-            zIndex: 40,
-          }}>
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={startManualScan}
-            style={[
-              styles.floatPrimary,
-              {
-                width: Math.min(360, Math.round(width * 0.78)),
-                paddingVertical: clamp(rf(12), 10, 18),
-              },
-            ]}>
-            <View style={styles.actionContent}>
-              <Ionicons
-                name="qr-code-outline"
-                size={rf(18)}
-                color="#fff"
-                style={{marginRight: 12}}
-              />
-              <Text
-                style={[
-                  styles.primaryActionText,
-                  {fontSize: clamp(rf(16), 14, 18)},
-                ]}>
-                Escanear QR
-              </Text>
-            </View>
-          </TouchableOpacity>
+        <View style={{height: 12}} />
 
-          <View style={{height: 12}} />
-
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={onStatusPress}
-            style={[
-              styles.floatSecondary,
-              {
-                width: Math.min(360, Math.round(width * 0.78)),
-                paddingVertical: clamp(rf(10), 8, 16),
-              },
-            ]}>
-            <View style={styles.actionContent}>
-              <Ionicons
-                name="time-outline"
-                size={rf(16)}
-                color="#fff"
-                style={{marginRight: 10}}
-              />
-              <Text
-                style={[
-                  styles.secondaryActionText,
-                  {fontSize: clamp(rf(15), 13, 17)},
-                ]}>
-                Status
-              </Text>
-            </View>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={onStatusPress}
+          style={[
+            styles.floatSecondary,
+            {
+              width: Math.min(360, Math.round(width * 0.78)),
+              paddingVertical: clamp(rf(10), 8, 16),
+            },
+          ]}>
+          <View style={styles.actionContent}>
+            <Ionicons
+              name="time-outline"
+              size={rf(16)}
+              color="#fff"
+              style={{marginRight: 10}}
+            />
+            <Text
+              style={[
+                styles.secondaryActionText,
+                {fontSize: clamp(rf(15), 13, 17)},
+              ]}>
+              Status
+            </Text>
+          </View>
+        </TouchableOpacity>
       </View>
 
-      {/* Animated Modal */}
       <AnimatedStatusModal
         visible={statusModalVisible}
         loading={statusLoading}
@@ -876,7 +907,7 @@ export default function QRScreen({navigation}) {
         }}
         headerHeight={headerHeight}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -935,6 +966,7 @@ const styles = StyleSheet.create({
   loadingText: {color: '#fff'},
 
   header: {
+    position: 'absolute', // important
     top: 0,
     left: 0,
     right: 0,
@@ -942,13 +974,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#fff',
+    backgroundColor: 'transparent',
     zIndex: 200,
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#e6eefc',
   },
   iconBtn: {width: 44, alignItems: 'center', justifyContent: 'center'},
-  headerTitle: {color: '#0046ff', fontWeight: '700'},
+  headerTitle: {color: '#ffff', fontWeight: '800'},
 
   cameraWrapper: {width: '100%', position: 'relative'},
   camera: {width: '100%', position: 'absolute', top: 0, left: 0},

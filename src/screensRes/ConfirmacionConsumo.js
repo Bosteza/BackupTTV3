@@ -1,5 +1,5 @@
-// ConfirmacionConsumo.js
-import React from 'react';
+// Works 9 marz
+import React, {useEffect, useState} from 'react';
 import {
   SafeAreaView,
   View,
@@ -14,6 +14,9 @@ import {
 import LinearGradient from 'react-native-linear-gradient';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useNavigation, useRoute} from '@react-navigation/native';
+const API_BASE_URL = 'https://api.residence.tab-track.com';
+const API_AUTH_TOKEN =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 export default function ConfirmacionConsumo() {
   const navigation = useNavigation();
@@ -30,6 +33,60 @@ export default function ConfirmacionConsumo() {
     sucursalId = null,
   } = (route && route.params) || {};
 
+  // nuevo: recogemos edificioId si viene en params (no se muestra)
+  const edificioIdFromParams =
+    (route &&
+      route.params &&
+      (route.params.edificioId ?? route.params.edificio_id)) ||
+    null;
+
+  const [restaurantName, setRestaurantName] = useState(restauranteId ?? null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function fetchRestaurantName() {
+      if (!restauranteId) return;
+      if (!edificioIdFromParams) return;
+
+      try {
+        const base = String(API_BASE_URL || '').replace(/\/$/, '');
+        const url = `${base}/api/residence/edificios/${encodeURIComponent(
+          String(edificioIdFromParams),
+        )}/restaurantes/${encodeURIComponent(String(restauranteId))}`;
+
+        const headers = {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        };
+        if (API_AUTH_TOKEN && String(API_AUTH_TOKEN).trim()) {
+          headers.Authorization = `Bearer ${API_AUTH_TOKEN}`;
+        }
+
+        const res = await fetch(url, {method: 'GET', headers});
+        if (!mounted) return;
+        if (!res.ok) {
+          // no hacemos nada drástico; dejamos fallback al id
+          console.warn('fetch restaurant name http error', res.status);
+          return;
+        }
+        const json = await res.json();
+        const name = json?.nombre ?? json?.name ?? null;
+        if (name && mounted) {
+          setRestaurantName(String(name));
+        }
+      } catch (err) {
+        console.warn('fetchRestaurantName error', err);
+        // fallback silencioso
+      }
+    }
+
+    fetchRestaurantName();
+
+    return () => {
+      mounted = false;
+    };
+  }, [restauranteId, edificioIdFromParams]);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const wp = p => (Number(p) / 100) * width;
   const hp = p => (Number(p) / 100) * height;
@@ -42,9 +99,10 @@ export default function ConfirmacionConsumo() {
 
   const formattedAmount =
     amount != null ? `$ ${Number(amount).toFixed(2)}` : '$ 0.00';
+
   const formattedDate = date
-    ? new Date(date).toLocaleString()
-    : new Date().toLocaleString();
+    ? new Date().toLocaleString()
+    : new Date(date).toLocaleString();
   const txLabel = transactionId ?? '';
 
   return (
@@ -139,7 +197,9 @@ export default function ConfirmacionConsumo() {
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Restaurante</Text>
-            <Text style={styles.detailValue}>{restauranteId ?? '—'}</Text>
+            <Text style={styles.detailValue}>
+              {restaurantName ?? restauranteId ?? '—'}
+            </Text>
           </View>
 
           <View style={styles.sep} />

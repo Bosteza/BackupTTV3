@@ -1,4 +1,5 @@
-import React, {useState, useRef} from 'react';
+//Good WORKINGGGGGGG
+import React, {useState, useRef, useEffect} from 'react';
 import {
   View,
   Text,
@@ -10,6 +11,7 @@ import {
   Animated,
   Easing,
   Platform,
+  useWindowDimensions,
   StatusBar,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
@@ -19,15 +21,17 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {Keyboard} from 'react-native';
 
 const API_BASE = 'https://api.tab-track.com/api/mobileapp';
-const API_TOKEN = '...';
+const API_TOKEN =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
+
 const BLUE = '#0046ff';
 
 export default function ResetPasswordCodeScreen() {
   const navigation = useNavigation();
   const route = useRoute();
-  const insets = useSafeAreaInsets();
+  const paramMail = route?.params?.mail ?? '';
 
-  const mail = route?.params?.mail ?? '';
+  const [mail] = useState(paramMail);
   const [code, setCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -36,6 +40,67 @@ export default function ResetPasswordCodeScreen() {
   const [toastMsg, setToastMsg] = useState('');
   const [toastStyle, setToastStyle] = useState(styles.toast);
 
+  const {width, height} = useWindowDimensions();
+  const wp = p => (width * Number(p)) / 100;
+  const hp = p => (height * Number(p)) / 100;
+  const rf = p => Math.round((width * Number(p)) / 100);
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+  const insets = useSafeAreaInsets();
+  const topSafe = Math.round(
+    Math.max(
+      insets.top || 0,
+      Platform.OS === 'android'
+        ? StatusBar.currentHeight || 0
+        : insets.top || 0,
+    ),
+  );
+  const bottomSafe = Math.round(insets.bottom || 0);
+  const dynamicStyles = {
+    container: {
+      paddingHorizontal: Math.min(wp(6), 40),
+      paddingVertical: Math.min(hp(6), 48),
+    },
+    logo: {
+      width: Math.min(wp(55), 220),
+      aspectRatio: 200 / 80,
+      height: undefined,
+      marginBottom: Math.min(hp(2.5), 22),
+    },
+    title: {
+      fontSize: clamp(rf(4.6), 16, 28),
+      marginBottom: Math.min(hp(1.8), 16),
+    },
+    subtitle: {
+      fontSize: clamp(rf(2.0), 12, 16),
+      marginBottom: Math.min(hp(1.2), 12),
+      textAlign: 'center',
+    },
+    input: {
+      height: clamp(hp(6.2), 40, 56),
+      borderRadius: Math.round(Math.min(999, hp(3.2))),
+      paddingHorizontal: Math.min(wp(4.5), 18),
+      marginBottom: Math.min(hp(1.6), 14),
+    },
+    button: {
+      width: Math.min(wp(72), 420),
+      height: clamp(hp(6.4), 44, 60),
+      borderRadius: Math.round(Math.min(999, hp(3.6))),
+      marginVertical: Math.min(hp(2.2), 18),
+    },
+    buttonText: {
+      fontSize: clamp(rf(2.4), 14, 18),
+    },
+    backText: {
+      fontSize: clamp(rf(1.9), 12, 16),
+      marginTop: Math.min(hp(1.2), 10),
+    },
+    toast: {
+      bottom:
+        Platform.OS === 'ios' ? Math.min(hp(8), 80) : Math.min(hp(5.2), 48),
+      maxWidth: Math.min(width - 40, wp(90)),
+    },
+  };
   const showToast = (message, success = false, duration = 1500, cb) => {
     setToastMsg(message);
     setToastStyle(success ? styles.successToast : styles.toast);
@@ -56,96 +121,177 @@ export default function ResetPasswordCodeScreen() {
       }, duration);
     });
   };
+  const validateEmail = e => {
+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return re.test(String(e).toLowerCase());
+  };
+
+  const validatePassword = p => {
+    return typeof p === 'string' && p.length >= 6;
+  };
 
   const handleUpdate = async () => {
     Keyboard.dismiss();
-
-    if (!mail || !code || !newPassword) {
-      return showToast('Completa todos los campos');
+    if (!mail || !mail.trim()) {
+      showToast('Correo no disponible. Regresa y envía el correo primero.');
+      return;
     }
-    if (newPassword.length < 6) {
-      return showToast('La contraseña debe tener al menos 6 caracteres');
+    if (!validateEmail(mail.trim())) {
+      showToast('Email inválido');
+      return;
+    }
+    if (!code.trim()) {
+      showToast('Ingresa el código');
+      return;
+    }
+    if (!newPassword) {
+      showToast('Ingresa la nueva contraseña');
+      return;
+    }
+    if (!validatePassword(newPassword)) {
+      showToast('La nueva contraseña debe tener al menos 6 caracteres');
+      return;
     }
 
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/usuarios/reset-password`, {
+      const url = `${API_BASE}/usuarios/reset-password`;
+      const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${API_TOKEN}`,
+          ...(API_TOKEN ? {Authorization: `Bearer ${API_TOKEN}`} : {}),
         },
         body: JSON.stringify({
-          mail,
+          mail: mail.trim(),
           code: code.trim(),
           new_password: newPassword,
         }),
       });
 
       const text = await res.text();
-      const data = JSON.parse(text);
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = {error: text};
+      }
 
       if (res.ok) {
-        showToast('Contraseña actualizada', true, 1200, () =>
+        showToast('Contraseña actualizada', true, 1400, () =>
           navigation.replace('Login'),
         );
       } else {
-        showToast(data?.error || 'No se pudo actualizar');
+        const errMsg =
+          data?.error ||
+          data?.message ||
+          data?.detalle ||
+          'No se pudo actualizar contraseña';
+        showToast(errMsg);
       }
-    } catch {
+    } catch (err) {
+      console.warn('reset error:', err);
       showToast('Error de red');
     } finally {
       setLoading(false);
     }
   };
 
-  const topPadding = Math.max(insets.top ?? 0, StatusBar.currentHeight ?? 0);
+  const toastBottom =
+    (Platform.OS === 'ios' ? Math.min(hp(8), 80) : Math.min(hp(5.2), 48)) +
+    bottomSafe;
 
   return (
     <View style={styles.flex}>
       <LinearGradient
-        colors={['#fff', '#fff']}
-        style={[styles.container, {paddingTop: topPadding}]}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color={BLUE} />
-        </TouchableOpacity>
+        colors={['rgb(255, 255, 255)', 'rgb(255, 255, 255)']}
+        locations={[0.35, 0.85]}
+        start={{x: 0, y: 1}}
+        end={{x: 1, y: 0}}
+        style={styles.container}>
+        <View
+          style={[
+            styles.content,
+            {
+              maxWidth: Math.min(wp(88), 420),
+              paddingHorizontal: Math.min(wp(6), 24),
+              paddingBottom: bottomSafe,
+            },
+          ]}>
+          <Image
+            source={require('../../assets/images/logo.png')}
+            style={[styles.logo, dynamicStyles.logo]}
+          />
 
-        <Image
-          source={require('../../assets/images/logo.png')}
-          style={styles.logo}
-        />
+          <Text style={[styles.title, dynamicStyles.title]}>
+            Introduce los campos para completar el proceso
+          </Text>
 
-        <Text style={styles.title}>Actualizar contraseña</Text>
+          <Text style={[styles.subtitle, dynamicStyles.subtitle]}>
+            Asegúrate de revisar que los campos sean correctos.
+          </Text>
 
-        <TextInput
-          style={[styles.input, styles.inputBorder]}
-          placeholder="Código"
-          placeholderTextColor="#000"
-          value={code}
-          onChangeText={setCode}
-        />
-
-        <TextInput
-          style={[styles.input, styles.inputBorder]}
-          placeholder="Nueva contraseña"
-          placeholderTextColor="#000"
-          secureTextEntry
-          value={newPassword}
-          onChangeText={setNewPassword}
-        />
-
-        <TouchableOpacity
-          style={[styles.button, loading && {opacity: 0.6}]}
-          onPress={handleUpdate}
-          disabled={loading}>
-          {loading ? (
-            <ActivityIndicator color="#0046ff" />
+          {mail ? (
+            <Text style={styles.mailText}>
+              Correo:{' '}
+              <Text style={{fontFamily: 'Montserrat-Bold'}}>{mail}</Text>
+            </Text>
           ) : (
-            <Text style={styles.buttonText}>Actualizar</Text>
+            <Text style={styles.mailErrorText}>
+              Correo no disponible. Regresa a la pantalla anterior.
+            </Text>
           )}
-        </TouchableOpacity>
+
+          <TextInput
+            style={[styles.input, styles.inputBorder, dynamicStyles.input]}
+            placeholder="Código (ej. 123456)"
+            placeholderTextColor="#000"
+            value={code}
+            onChangeText={text => {
+              const onlyNumbers = text.replace(/\D/g, '');
+              setCode(onlyNumbers);
+
+              if (onlyNumbers.length === 6) {
+                Keyboard.dismiss();
+              }
+            }}
+            keyboardType="numeric"
+            maxLength={6}
+            autoCapitalize="none"
+          />
+
+          <TextInput
+            style={[styles.input, styles.inputBorder, dynamicStyles.input]}
+            placeholder="Nueva contraseña"
+            placeholderTextColor="#000"
+            secureTextEntry
+            value={newPassword}
+            onChangeText={setNewPassword}
+          />
+
+          <TouchableOpacity
+            style={[
+              styles.button,
+              loading && {opacity: 0.6},
+              dynamicStyles.button,
+            ]}
+            onPress={handleUpdate}
+            disabled={loading}>
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={[styles.buttonText, dynamicStyles.buttonText]}>
+                Actualizar
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => navigation.replace('Login')}>
+            <Text style={[styles.backText, dynamicStyles.backText]}>
+              Volver al inicio de sesión
+            </Text>
+          </TouchableOpacity>
+        </View>
       </LinearGradient>
 
       <Animated.View
@@ -163,6 +309,7 @@ export default function ResetPasswordCodeScreen() {
               },
             ],
           },
+          {bottom: toastBottom, maxWidth: dynamicStyles.toast.maxWidth},
         ]}>
         <Text style={styles.toastText}>{toastMsg}</Text>
       </Animated.View>
@@ -175,27 +322,61 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
+
   container: {
     flex: 1,
-    justifyContent: 'flex-start',
-    alignItems: 'center',
-    paddingVertical: 120,
   },
+
+  content: {
+    flex: 1,
+    width: '100%',
+    alignSelf: 'center',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
   logo: {
     width: 250,
     height: 100,
     resizeMode: 'contain',
     marginBottom: 20,
   },
+
   title: {
+    width: '100%',
     fontSize: 24,
     color: '#000',
     fontFamily: 'Montserrat-Bold',
     textAlign: 'center',
     marginBottom: 20,
   },
+
+  subtitle: {
+    width: '100%',
+    color: '#000',
+    fontFamily: 'Montserrat-Regular',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+
+  mailText: {
+    width: '100%',
+    marginBottom: 10,
+    fontFamily: 'Montserrat-Regular',
+    color: '#000',
+    textAlign: 'center',
+  },
+
+  mailErrorText: {
+    width: '100%',
+    marginBottom: 10,
+    fontFamily: 'Montserrat-Regular',
+    color: '#a00',
+    textAlign: 'center',
+  },
+
   input: {
-    width: '80%',
+    width: '100%',
     height: 40,
     borderRadius: 20,
     paddingHorizontal: 15,
@@ -203,24 +384,35 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     color: '#000',
   },
+
   inputBorder: {
     borderColor: '#000',
     borderWidth: 1,
   },
+
   button: {
+    width: '100%',
     backgroundColor: '#0046ff',
     borderRadius: 25,
-    width: '60%',
     height: 40,
     justifyContent: 'center',
     alignItems: 'center',
     marginVertical: 20,
   },
+
   buttonText: {
     color: '#fff',
     fontSize: 16,
     fontFamily: 'Montserrat-Bold',
   },
+
+  backText: {
+    width: '100%',
+    color: '#000',
+    textAlign: 'center',
+    fontFamily: 'Montserrat-Regular',
+  },
+
   toast: {
     position: 'absolute',
     bottom: Platform.OS === 'ios' ? 80 : 40,
@@ -231,6 +423,7 @@ const styles = StyleSheet.create({
     borderRadius: 25,
     maxWidth: '85%',
   },
+
   successToast: {
     position: 'absolute',
     bottom: Platform.OS === 'ios' ? 80 : 40,
@@ -241,15 +434,11 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     maxWidth: '90%',
   },
+
   toastText: {
     color: '#fff',
     fontSize: 14,
     textAlign: 'center',
     fontFamily: 'Montserrat-Regular',
-  },
-  backButton: {
-    position: 'absolute',
-    top: 20,
-    left: 24,
   },
 });

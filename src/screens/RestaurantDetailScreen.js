@@ -1,3 +1,4 @@
+//FALTA ACTUALIZAR CORAZÓN GUEST MODE
 import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   View,
@@ -48,6 +49,19 @@ const getUserIdentifier = async () => {
 const userFavoritesKey = async () => `favorites_${await getUserIdentifier()}`;
 const userFavoritesObjsKey = async () =>
   `favorites_objs_${await getUserIdentifier()}`;
+
+const isGuestMode = async () => {
+  try {
+    const pairs = await AsyncStorage.multiGet([
+      'session_active',
+      'session_guest',
+    ]);
+    const map = Object.fromEntries(pairs);
+    return map.session_active !== '1' && map.session_guest === '1';
+  } catch {
+    return false;
+  }
+};
 
 export default function RestaurantDetailScreen() {
   const navigation = useNavigation();
@@ -197,6 +211,7 @@ export default function RestaurantDetailScreen() {
   const showToastWithAction = message => _showToast(message, 'action');
 
   // Toggle favorito
+  // Toggle favorito
   const toggleFavorite = async () => {
     try {
       const sid = String(idParam ?? data?.id ?? data?.restaurante_id ?? '');
@@ -264,6 +279,14 @@ export default function RestaurantDetailScreen() {
       console.warn('toggleFavorite error', e);
       _showToast('Error al actualizar favoritos', 'simple');
     }
+  };
+
+  const toggleFavoriteGuarded = async () => {
+    if (await isGuestMode()) {
+      navigation.navigate('Perfil');
+      return;
+    }
+    toggleFavorite();
   };
 
   const onShare = async () => {
@@ -648,22 +671,25 @@ export default function RestaurantDetailScreen() {
           ]}>
           <TouchableOpacity
             onPress={() => navigation.goBack()}
+            style={styles.headerIconButton}
             hitSlop={{top: 10, left: 10, right: 10, bottom: 10}}>
             <Ionicons name="arrow-back" size={ICON_SIZE} color="#fff" />
           </TouchableOpacity>
+
           <View style={styles.headerIcons}>
             <TouchableOpacity
               onPress={onShare}
-              style={{marginLeft: Math.round(width * 0.02)}}>
+              style={[styles.headerIconButton, styles.headerIconSpacing]}>
               <Ionicons
                 name="share-social-outline"
                 size={ICON_SIZE}
                 color="#fff"
               />
             </TouchableOpacity>
+
             <TouchableOpacity
-              onPress={toggleFavorite}
-              style={{marginLeft: Math.round(width * 0.02)}}>
+              onPress={toggleFavoriteGuarded}
+              style={[styles.headerIconButton, styles.headerIconSpacing]}>
               <Ionicons
                 name={isFavorite ? 'heart' : 'heart-outline'}
                 size={ICON_SIZE}
@@ -1074,6 +1100,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 14,
     paddingHorizontal: 4,
+  },
+  headerIconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.32)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerIconSpacing: {
+    marginLeft: 10,
   },
   socialIconWrap: {
     backgroundColor: '#fff',

@@ -1,3 +1,5 @@
+//Camera wrking???
+
 import React, {useEffect, useState, useRef, useCallback} from 'react';
 import {
   View,
@@ -42,7 +44,7 @@ const camWarn = (...a) => console.warn('[QR][CAM][WARN]', ...a);
 
 const API_BASE_FALLBACK = 'https://api.residence.tab-track.com';
 const API_TOKEN_FALLBACK =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const STORAGE_KEYS = {
   API_HOST: 'api_host',
@@ -50,7 +52,7 @@ const STORAGE_KEYS = {
 };
 
 const WHATSAPP_FULL_URL =
-  'https://api.whatsapp.com/send?phone=5214611011391&text=%C2%A1Hola!%20Quiero%20m%C3%A1s%20informaci%C3%B3n%20de%20';
+  'https://api.whatsapp.com/send?phone=525647197764&text=%C2%A1Hola!%20Quiero%20m%C3%A1s%20informaci%C3%B3n%20de%20';
 
 const openWhatsApp = async () => {
   try {
@@ -366,66 +368,123 @@ export default function QrResidence({navigation}) {
   );
   const gradientCardLeftRight = Math.round(Math.max(12, width * 0.06));
   const gradientInnerPad = Math.round(Math.max(12, width * 0.04));
-  const gradientSeparation = 8;
+  const gradientSeparation = 8; // copied from first code
 
   const holeGap = clamp(rf(45), 45, 90);
+  const holeTopBase = headerHeight + gradientCardHeight + holeGap;
 
-  const qrSize = Math.min(Math.round(width * 0.68), clamp(360, 220, 500));
-  /*
-  const holeTop = headerHeight + gradientCardHeight + holeGap;
-  const holeLeft = Math.round((width - qrSize) / 2);
-*/
-  const cornerArc = clamp(64, 40, 96);
-  const cornerThickness = Math.max(8, Math.round((width / 375) * 10));
-  const cornerOuterRadius = Math.round(Math.min(qrSize, 320) * 0.06);
+  const qrSizeRequested = Math.min(
+    Math.round(width * 0.6),
+    clamp(420, 180, 460),
+  );
 
   const overlayAlpha = 0.26;
   const innerPanelOpacity = 0.04;
 
-  const bottomReserve = tabBarHeight; // prefer this
-
   const CAMERA_HEIGHT = Math.max(
-    height - headerHeight - bottomReserve,
+    height - tabBarHeight + 50,
     Math.round(height * 0.48),
   );
 
-  const logoMaxWidth = Math.round(Math.min(160, width * 0.36));
-  const logoWidth = Math.min(logoMaxWidth, Math.round(qrSize * 0.38));
-  const logoHeight = Math.round(logoWidth * 0.5);
-  /*
-  const logoTopPos = Math.max(
-    headerHeight + Math.round(gradientCardHeight * 0.1),
-    holeTop - logoHeight - Math.round(logoHeight * 0.25),
-  ); */
+  const layoutHeight = CAMERA_HEIGHT;
 
-  const logoGap = clamp(rf(14), 10, 24);
-  const scanStackHeight = logoHeight + logoGap + qrSize;
-
-  // gradient card position relative to the CAMERA wrapper:
-  // cameraWrapper starts after the header, so headerHeight cancels out
-  const cardTopInCamera = insets.top + gradientSeparation;
-  const cardBottomInCamera = cardTopInCamera + gradientCardHeight;
-
-  // top/bottom padding that we must avoid
-  const topPad = Math.round(cardBottomInCamera + clamp(rf(10), 10, 28));
-  const extraBottomCushion = clamp(rf(18), 12, 28); // small aesthetic gap
-  const bottomPad = Math.round(
-    buttonsHeight + tabBarHeight + insets.bottom + extraBottomCushion,
+  // bigger, more prominent logo like first code
+  const logoMaxWidth = Math.round(Math.min(300, width * 0.62));
+  const desiredLogoWidth = Math.min(
+    logoMaxWidth,
+    Math.round(qrSizeRequested * 0.62),
   );
+  const desiredLogoHeight = Math.round(desiredLogoWidth * 0.55);
+  const minLogoHeight = 74;
 
-  // center stack inside remaining vertical space
-  const availableH = Math.max(0, CAMERA_HEIGHT - topPad - bottomPad);
-  const stackTop = Math.round(topPad + (availableH - scanStackHeight) / 2);
+  const gradientBottom =
+    insets.top + headerHeight + gradientSeparation + gradientCardHeight;
+  const preferredGap = Math.round(Math.max(18, width * 0.06));
+  const innerGap = Math.round(Math.max(10, width * 0.03));
+  const logoTopDefault = gradientBottom + preferredGap;
 
-  // apply positions
-  const logoTopPos = clamp(stackTop, 0, CAMERA_HEIGHT);
-  const holeTop = clamp(
-    Math.round(stackTop + logoHeight + logoGap),
-    0,
-    Math.max(0, CAMERA_HEIGHT - qrSize),
+  let computedLogoHeight = desiredLogoHeight;
+  let computedLogoWidth = desiredLogoWidth;
+
+  const availableForLogo = holeTopBase - gradientBottom;
+
+  if (availableForLogo <= preferredGap + innerGap + minLogoHeight) {
+    computedLogoHeight = Math.max(
+      minLogoHeight,
+      Math.round(desiredLogoHeight * 0.5),
+    );
+    computedLogoWidth = Math.max(40, Math.round(computedLogoHeight / 0.55));
+  } else if (desiredLogoHeight + preferredGap + innerGap > availableForLogo) {
+    const allowedLogoHeight = Math.max(
+      minLogoHeight,
+      availableForLogo - preferredGap - innerGap,
+    );
+    const scale = Math.min(1, allowedLogoHeight / desiredLogoHeight);
+    computedLogoHeight = Math.max(
+      minLogoHeight,
+      Math.round(desiredLogoHeight * scale),
+    );
+    computedLogoWidth = Math.max(40, Math.round(computedLogoHeight / 0.55));
+  }
+
+  const computedLogoTop = logoTopDefault;
+  const gapLogoToHoleDesired = Math.round(Math.max(14, width * 0.04));
+  const logoBottom = computedLogoTop + computedLogoHeight;
+
+  let dynamicHoleTop = holeTopBase;
+  if (logoBottom + gapLogoToHoleDesired >= holeTopBase) {
+    dynamicHoleTop = logoBottom + gapLogoToHoleDesired;
+  }
+
+  const gapButtonsBelowHole = Math.round(Math.max(14, width * 0.06));
+  const reservedForButtons = insets.bottom + 140;
+
+  let finalQrSize = Math.min(
+    qrSizeRequested,
+    Math.max(140, layoutHeight - dynamicHoleTop - reservedForButtons),
   );
+  finalQrSize = Math.max(140, finalQrSize);
 
-  const holeLeft = Math.round((width - qrSize) / 2);
+  if (finalQrSize < qrSizeRequested && computedLogoHeight > minLogoHeight) {
+    const reduceLogoBy = Math.min(
+      Math.round((qrSizeRequested - finalQrSize) * 0.28),
+      Math.round(computedLogoHeight * 0.35),
+    );
+
+    if (reduceLogoBy > 0) {
+      computedLogoHeight = Math.max(
+        minLogoHeight,
+        computedLogoHeight - reduceLogoBy,
+      );
+      computedLogoWidth = Math.max(40, Math.round(computedLogoHeight / 0.55));
+
+      const newLogoBottom = computedLogoTop + computedLogoHeight;
+      dynamicHoleTop = Math.max(
+        holeTopBase,
+        newLogoBottom + gapLogoToHoleDesired,
+      );
+    }
+  }
+
+  let buttonsTop = dynamicHoleTop + finalQrSize + gapButtonsBelowHole;
+  const buttonsBottomOverflow =
+    buttonsTop + 140 - (layoutHeight - insets.bottom);
+
+  if (buttonsBottomOverflow > 0) {
+    finalQrSize = Math.max(
+      140,
+      finalQrSize - Math.min(80, buttonsBottomOverflow + 10),
+    );
+    buttonsTop = dynamicHoleTop + finalQrSize + gapButtonsBelowHole;
+  }
+
+  const holeLeft = Math.round((width - finalQrSize) / 2);
+
+  // responsive corner styling from first code
+  const cornerArc = clamp(Math.round(finalQrSize * 0.18), 30, 96);
+  const cornerThickness = Math.max(6, Math.round((width / 375) * 8));
+  const cornerOuterRadius = Math.round(Math.min(finalQrSize, 320) * 0.06);
+
   const fallbackConsumed = 425.0;
   const fallbackAvailable = 3075.0;
   const fallbackUtilization =
@@ -841,7 +900,6 @@ export default function QrResidence({navigation}) {
       fetchDepartmentHistory();
     }, [fetchDepartmentHistory]),
   );
-
   useEffect(() => {
     fetchDepartmentHistory();
   }, [fetchDepartmentHistory]);
@@ -868,30 +926,80 @@ export default function QrResidence({navigation}) {
       </View>
     );
   }
+  // formato con comas
+  const formatNumberWithCommas = v => {
+    const num = Number(v) || 0;
+    const parts = num.toFixed(2).split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return parts.join('.');
+  };
 
   const consumed = deptBilling
     ? Number(deptBilling.monto_mensual_usado || 0)
     : fallbackConsumed;
-  const available = deptBilling
-    ? Number(deptBilling.saldo_disponible || 0)
-    : fallbackAvailable;
+  // --- NUEVA LÓGICA: calcular disponible y mostrar negativo si corresponde ---
+  // Si el API trae saldo_mensual y monto_mensual_usado, calculamos computedAvailable = saldo_mensual - monto_mensual_usado.
+  // Si computedAvailable < 0, preferimos mostrar ese negativo . Si no, usamos saldo_disponible del API cuando exista.
+  let availableNumber;
+  if (deptHistoryLoading) {
+    availableNumber = null;
+  } else if (deptBilling) {
+    const saldoMensual = Number(deptBilling.saldo_mensual || 0);
+    const montoUsado = Number(deptBilling.monto_mensual_usado || 0);
+    const computedAvailable = saldoMensual - montoUsado;
+
+    const apiAvailRaw = deptBilling.saldo_disponible;
+    const apiAvailable =
+      apiAvailRaw !== undefined &&
+      apiAvailRaw !== null &&
+      !Number.isNaN(Number(apiAvailRaw))
+        ? Number(apiAvailRaw)
+        : null;
+
+    if (!Number.isNaN(computedAvailable) && computedAvailable < 0) {
+      availableNumber = computedAvailable;
+    } else if (apiAvailable !== null) {
+      availableNumber = apiAvailable;
+    } else {
+      availableNumber = computedAvailable;
+    }
+  } else {
+    availableNumber = Number(fallbackAvailable);
+  }
   const utilization =
-    consumed + available > 0
-      ? Math.round((consumed / (consumed + available)) * 1000) / 10
+    consumed +
+      (availableNumber !== null ? availableNumber : fallbackAvailable) >
+    0
+      ? Math.round(
+          (consumed /
+            (consumed +
+              (availableNumber !== null
+                ? availableNumber
+                : fallbackAvailable))) *
+            1000,
+        ) / 10
       : 0;
+
   const consumedDisplay = deptHistoryLoading
     ? '…'
     : deptBilling
-    ? `${Number(consumed).toFixed(2)}`
-    : `${fallbackConsumed.toFixed(2)}`;
-  const availableDisplay = deptHistoryLoading
+    ? formatNumberWithCommas(consumed)
+    : formatNumberWithCommas(fallbackConsumed);
+  const availableIsNegative = availableNumber !== null && availableNumber < 0;
+  const formattedAvailableDisplay = deptHistoryLoading
     ? '…'
-    : deptBilling
-    ? `${Number(available).toFixed(2)}`
-    : `${fallbackAvailable.toFixed(2)}`;
+    : availableIsNegative
+    ? `-$${formatNumberWithCommas(Math.abs(availableNumber))}`
+    : `$${formatNumberWithCommas(availableNumber)}`;
+  const availableTextColor = deptHistoryLoading
+    ? '#fff'
+    : availableIsNegative
+    ? '#FF3B30'
+    : '#fff';
+
   const utilizationDisplay = deptHistoryLoading ? '…' : `${utilization}%`;
   return (
-    <SafeAreaView style={{flex: 1, backgroundColor: '#000'}}>
+    <View style={{flex: 1, backgroundColor: '#000'}}>
       {isFocused && (
         <StatusBar
           barStyle="light-content"
@@ -901,15 +1009,19 @@ export default function QrResidence({navigation}) {
       )}
 
       {/* Header */}
-      <View style={[styles.header, {height: headerHeight}]}>
+      <View
+        style={[
+          styles.header,
+          {height: headerHeight + insets.top, paddingTop: insets.top},
+        ]}>
         <TouchableOpacity
           onPress={openWhatsApp}
           style={styles.iconBtn}
           activeOpacity={0.8}>
           <MaterialCommunityIcons
             name="face-agent"
-            size={rf(22)}
-            color="#0046ff"
+            size={rf(26)}
+            color="#ffff"
           />
         </TouchableOpacity>
 
@@ -923,8 +1035,8 @@ export default function QrResidence({navigation}) {
           activeOpacity={1}>
           <Ionicons
             name={flashEnabled ? 'flashlight' : 'flashlight-outline'}
-            size={rf(22)}
-            color="#0046ff"
+            size={rf(26)}
+            color="#ffff"
           />
         </TouchableOpacity>
       </View>
@@ -932,7 +1044,7 @@ export default function QrResidence({navigation}) {
       {/* Gradient card */}
       <View
         pointerEvents="box-none"
-        onLayout={e => setButtonsHeight(e.nativeEvent.layout.height)}
+        //onLayout={e => setButtonsHeight(e.nativeEvent.layout.height)}
         style={{
           position: 'absolute',
           top: insets.top + headerHeight + gradientSeparation,
@@ -955,33 +1067,51 @@ export default function QrResidence({navigation}) {
               end={{x: 1, y: 1}}
               style={{flex: 1}}>
               <View style={{flex: 1, padding: gradientInnerPad}}>
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                  }}>
-                  <View>
-                    <Text style={styles.gradientSmallLabel}>Usado</Text>
-                    <Text style={styles.gradientSmallValue}>
-                      ${consumedDisplay}
+                {/* ✅ deptHistoryLoading block added here (only replaces the top row content) */}
+                {deptHistoryLoading ? (
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      zIndex: 999,
+                    }}>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <Text style={[styles.gradientSmallLabel, {marginLeft: 8}]}>
+                      Cargando consumo del departamento…
                     </Text>
                   </View>
+                ) : (
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      zIndex: 999,
+                    }}>
+                    <View>
+                      <Text style={styles.gradientSmallLabel}>Usado</Text>
+                      <Text style={styles.gradientSmallValue}>
+                        ${consumedDisplay}
+                      </Text>
+                    </View>
 
-                  <View style={{alignItems: 'flex-end'}}>
-                    <Text style={styles.gradientSmallLabel}>Disponible</Text>
-                    <Text
-                      style={[
-                        styles.gradientSmallValue,
-                        {
-                          fontSize: Math.round(clamp(rf(20), 18, 26)),
-                          fontWeight: '900',
-                        },
-                      ]}>
-                      ${availableDisplay}
-                    </Text>
+                    <View style={{alignItems: 'flex-end'}}>
+                      <Text style={styles.gradientSmallLabel}>Disponible</Text>
+                      <Text
+                        style={[
+                          styles.gradientSmallValue,
+                          {
+                            fontSize: Math.round(clamp(rf(20), 18, 26)),
+                            fontWeight: '900',
+                            color: availableTextColor,
+                          },
+                        ]}>
+                        {formattedAvailableDisplay}
+                      </Text>
+                    </View>
                   </View>
-                </View>
+                )}
                 <View style={{height: 10}} />
                 <View
                   style={{
@@ -1031,7 +1161,10 @@ export default function QrResidence({navigation}) {
           <View
             style={[
               styles.overlayRow,
-              {height: holeTop, backgroundColor: `rgba(0,0,0,${overlayAlpha})`},
+              {
+                height: dynamicHoleTop,
+                backgroundColor: `rgba(0,0,0,${overlayAlpha})`,
+              },
             ]}
           />
 
@@ -1039,24 +1172,24 @@ export default function QrResidence({navigation}) {
           <View
             style={{
               position: 'absolute',
-              top: logoTopPos,
+              top: computedLogoTop,
               left: 0,
               right: 0,
               alignItems: 'center',
-              zIndex: 30,
+              zIndex: 60,
               pointerEvents: 'none',
             }}>
             <Image
-              source={require('../../assets/images/logo2.png')}
+              source={require('../../assets/images/LogoResB.png')}
               style={{
-                width: logoWidth,
-                height: logoHeight,
+                width: computedLogoWidth,
+                height: computedLogoHeight,
                 resizeMode: 'contain',
                 shadowColor: '#000',
                 shadowOffset: {width: 0, height: 2},
                 shadowOpacity: 0.12,
                 shadowRadius: 4,
-                elevation: 4,
+                elevation: 6,
               }}
             />
           </View>
@@ -1072,12 +1205,13 @@ export default function QrResidence({navigation}) {
               ]}
             />
 
-            <View style={[styles.hole, {width: qrSize, height: qrSize}]}>
+            <View
+              style={[styles.hole, {width: finalQrSize, height: finalQrSize}]}>
               <View
                 style={{
                   position: 'absolute',
-                  width: qrSize - 8,
-                  height: qrSize - 8,
+                  width: finalQrSize - 8,
+                  height: finalQrSize - 8,
                   borderRadius: cornerOuterRadius,
                   backgroundColor: `rgba(255,255,255,${innerPanelOpacity})`,
                   zIndex: 3,
@@ -1171,11 +1305,11 @@ export default function QrResidence({navigation}) {
           pointerEvents="box-none"
           style={{
             position: 'absolute',
-            bottom: bottomReserve,
+            top: buttonsTop,
             left: 0,
             right: 0,
             alignItems: 'center',
-            zIndex: 40,
+            zIndex: 80,
           }}>
           <TouchableOpacity
             activeOpacity={1}
@@ -1210,7 +1344,7 @@ export default function QrResidence({navigation}) {
             activeOpacity={1}
             onPress={() => navigation.navigate('Miembros')}
             style={[
-              styles.floatPrimary,
+              styles.floatSecondary,
               {
                 width: Math.min(360, Math.round(width * 0.78)),
                 paddingVertical: clamp(rf(10), 8, 16),
@@ -1247,7 +1381,7 @@ export default function QrResidence({navigation}) {
         }}
         headerHeight={headerHeight}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -1305,6 +1439,7 @@ const styles = StyleSheet.create({
   loadingText: {color: '#fff'},
 
   header: {
+    position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
@@ -1312,13 +1447,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#fff',
+    backgroundColor: 'transparent',
     zIndex: 200,
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#e6eefc',
   },
   iconBtn: {width: 44, alignItems: 'center', justifyContent: 'center'},
-  headerTitle: {color: '#0046ff', fontWeight: '700'},
+  headerTitle: {color: '#ffff', fontWeight: '800'},
 
   cameraWrapper: {width: '100%', position: 'relative'},
   camera: {width: '100%', position: 'absolute', top: 0, left: 0},
@@ -1366,7 +1499,37 @@ const styles = StyleSheet.create({
     overflow: 'visible',
     backgroundColor: 'transparent',
   },
+  zero: {height: 0, flex: 0},
 
+  statusModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  statusModalBox: {
+    width: '86%',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 18,
+    alignItems: 'flex-start',
+  },
+  statusTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0046ff',
+    marginBottom: 8,
+  },
+  statusMessage: {fontSize: 15, color: '#333', marginBottom: 6},
+  statusDetails: {fontSize: 13, color: '#666', marginBottom: 6},
+  statusBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statusBtnText: {fontSize: 14, fontWeight: '700'},
   gradientCardSmall: {
     width: '100%',
     overflow: 'hidden',

@@ -1,3 +1,4 @@
+//Working 9 mar
 import React, {useEffect, useState, useCallback, useRef, useMemo} from 'react';
 import {
   SafeAreaView,
@@ -25,7 +26,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 const API_BASE_URL = 'https://api.tab-track.com';
 const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const VISITS_STORAGE_KEY = 'user_visits';
 const PENDING_VISITS_KEY = 'pending_visits';
@@ -277,6 +278,7 @@ export default function Escanear() {
   }, []);
 
   const [discountAmount, setDiscountAmount] = useState(0);
+  const [discountPercentLabel, setDiscountPercentLabel] = useState(null); // e.g. "7%" or "7% + 3%"
 
   const checkPendingPromotions = useCallback(async (log = false) => {
     try {
@@ -573,15 +575,62 @@ export default function Escanear() {
         }
 
         try {
-          const montoDesc = safeNum(
+          let montoDesc = safeNum(
             json?.descuentos_venta?.monto_total ??
               json?.totales_venta?.total_descuentos ??
               0,
           );
-          if (isMountedRef.current) setDiscountAmount(+montoDesc.toFixed(2));
+          let percentLabel = null;
+
+          const detalle = Array.isArray(json?.descuentos_venta?.detalle)
+            ? json.descuentos_venta.detalle
+            : Array.isArray(json?.totales_venta?.descuentos)
+            ? json.totales_venta.descuentos
+            : [];
+          if (
+            (!montoDesc || montoDesc <= 0) &&
+            Array.isArray(detalle) &&
+            detalle.length > 0
+          ) {
+            // sumar montos directos y calcular montos desde porcentajes
+            let acum = 0;
+            const pctParts = [];
+            for (const d of detalle) {
+              const m = safeNum(d.monto ?? d.amount ?? 0);
+              const p = safeNum(d.porcentaje ?? d.percent ?? d.p ?? 0);
+              if (m > 0) {
+                acum += m;
+              } else if (p > 0) {
+                const calc = +(computedTotal * (p / 100));
+                acum += calc;
+                pctParts.push(Number(p));
+              }
+            }
+            montoDesc = acum;
+            if (pctParts.length === 1) percentLabel = `${pctParts[0]}%`;
+            else if (pctParts.length > 1)
+              percentLabel = pctParts.map(x => `${x}%`).join(' + ');
+          } else {
+            // si montoDesc viene y detalle tiene un porcentaje único, podemos mostrarlo también
+            if (Array.isArray(detalle) && detalle.length === 1) {
+              const p = safeNum(
+                detalle[0].porcentaje ?? detalle[0].percent ?? 0,
+              );
+              if (p > 0) percentLabel = `${p}%`;
+            }
+          }
+
+          if (isMountedRef.current) {
+            setDiscountAmount(+Number(montoDesc || 0).toFixed(2));
+            setDiscountPercentLabel(percentLabel);
+          }
         } catch (e) {
-          if (isMountedRef.current) setDiscountAmount(0);
+          if (isMountedRef.current) {
+            setDiscountAmount(0);
+            setDiscountPercentLabel(null);
+          }
         }
+        // --- FIN DESCUENTO ---
 
         const sale = json.sale_id ?? json.venta_id ?? json.id ?? null;
         const suc = json.sucursal_id ?? json.sucursal ?? null;
@@ -1050,7 +1099,8 @@ export default function Escanear() {
 
   // botones deshabilitados (para feedback visual)
   const primaryDisabled = consumoPaid || equalsSplitPaid; // Pago en una sola: bloquear si consumoPaid o equal paid
-  const pagarConsumoDisabled = equalsSplitPaid; // Pagar por consumo: bloquear si equal paid
+  const pagarConsumoDisabled =
+    equalsSplitPaid || Number(discountAmount || 0) > 0; // Pagar por consumo: bloquear si equal paid
   const equalSplitDisabled = consumoPaid; // Pago por partes iguales: bloquear si consumoPaid
 
   return (
@@ -1451,6 +1501,7 @@ export default function Escanear() {
                       {fontSize: subtotalValueFont},
                     ]}>
                     -{formatMoney(discountAmount)} {moneda ?? 'MXN'}
+                    {discountPercentLabel ? ` (${discountPercentLabel})` : ''}
                   </Text>
                 </View>
               )}
@@ -1957,7 +2008,6 @@ const styles = StyleSheet.create({
   modalBox: {
     borderRadius: 12,
     alignItems: 'center',
-    padding: 18,
 
     // card-like sizing
     width: '100%',
@@ -1973,6 +2023,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginBottom: 8,
     textAlign: 'center',
+    paddingTop: 18,
   },
 
   modalMessageScroll: {
@@ -1991,8 +2042,9 @@ const styles = StyleSheet.create({
   modalButtonsRow: {
     flexDirection: 'row',
     width: '100%',
-    justifyContent: 'center',
-    alignItems: 'stretch', // change from center
+    justifyContent: 'space-between',
+    paddingBottom: 18,
+    paddingHorizontal: 18,
   },
 
   modalBtnPrimary: {

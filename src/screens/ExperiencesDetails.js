@@ -1,6 +1,5 @@
-import React, {useState, useEffect} from 'react';
-import {useNotifications} from './NotificationProvider';
-
+//Working 9 mer
+import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   SafeAreaView,
   View,
@@ -17,6 +16,7 @@ import {
   Linking,
   Alert,
   useWindowDimensions,
+  PixelRatio,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -25,7 +25,7 @@ const VISITS_STORAGE_KEY = 'user_visits';
 
 const API_BASE_URL = 'https://api.tab-track.com';
 const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const WHATSAPP_URL_DIRECT =
   'https://api.whatsapp.com/send?phone=5214611011391&text=%C2%A1Hola!%20Quiero%20m%C3%A1s%20informaci%C3%B3n%20de%20';
@@ -88,9 +88,6 @@ function candidateMatchesCodigo(candidateRaw, codigoRaw) {
   return false;
 }
 
-/* -------------------------------------------------------------------- */
-/* RESPONSIVE: pequeño hook utilitario (sin dependencias externas)       */
-/* -------------------------------------------------------------------- */
 function useResponsive() {
   const {width, height} = useWindowDimensions();
 
@@ -108,84 +105,377 @@ function useResponsive() {
   const rf = percent => {
     const p = Number(percent);
     if (!p) return 0;
-    return Math.round((p / 100) * width);
+    return Math.round(PixelRatio.roundToNearestPixel((p * width) / 375));
   };
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
   return {width, height, wp, hp, rf, clamp};
 }
-/* -------------------------------------------------------------------- */
 
 export default function DetailScreen({navigation, route}) {
-  const {width, wp, hp, rf, clamp} = useResponsive(); // RESPONSIVE hook
+  const {width, wp, hp, rf, clamp} = useResponsive();
 
   const [showNotifications, setShowNotifications] = useState(false);
-  const {notifications, unreadCount, markAllRead} = useNotifications();
+  const [notifications, setNotifications] = useState([]);
+  const pollIntervalRef = useRef(null);
+  const isMountedRef = useRef(true);
+  const emailRef = useRef(null);
+  const MAX_STORE = 100;
+
   const [visit, setVisit] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const [currentUserId, setCurrentUserId] = useState(null);
-  const [filteredItems, setFilteredItems] = useState(null); // null = not attempted, [] = attempted but none found
+  const [filteredItems, setFilteredItems] = useState(null);
   const [isSplitsLoading, setIsSplitsLoading] = useState(false);
   const [showFull, setShowFull] = useState(false);
 
-  // Nuevo estado: total de propina atribuible al usuario según propinas_por_tx
+  const [fullItems, setFullItems] = useState(null);
+  const [isFullLoading, setIsFullLoading] = useState(false);
+
   const [userPropinaTotal, setUserPropinaTotal] = useState(0);
 
-  useEffect(() => {
-    (async () => {
-      // si nos pasan la visita en params, la usamos directamente
-      if (route?.params?.visit) {
-        setVisit(route.params.visit);
-        setLoading(false);
-        try {
-          await tryFetchSplits(route.params.visit);
-        } catch (e) {
-          /* noop */
-        }
+  const notifScrollRef = useRef(null);
+
+  const [showScrollDown, setShowScrollDown] = useState(false);
+
+  // track scroll + sizes so we can decide if "more below"
+  const scrollMetricsRef = useRef({
+    y: 0,
+    contentH: 0,
+    layoutH: 0,
+  });
+
+  // tweak threshold so it hides slightly before the absolute bottom
+  const BOTTOM_THRESHOLD = 24;
+
+  const recomputeShowChevron = useCallback(() => {
+    const {y, contentH, layoutH} = scrollMetricsRef.current;
+    const overflow = contentH - layoutH;
+
+    // If no overflow, no chevron.
+    if (overflow <= 8) {
+      setShowScrollDown(false);
+      return;
+    }
+
+    const nearBottom = y >= overflow - BOTTOM_THRESHOLD;
+    setShowScrollDown(!nearBottom);
+  }, []);
+
+  async function loadSeenIds(email) {
+    if (!email) return new Set();
+    try {
+      const raw = await AsyncStorage.getItem(`notifications_seen_${email}`);
+      if (!raw) return new Set();
+      const arr = JSON.parse(raw);
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch (e) {
+      console.warn('loadSeenIds err', e);
+      return new Set();
+    }
+  }
+  async function saveSeenIds(email, setOfIds) {
+    if (!email) return;
+    try {
+      await AsyncStorage.setItem(
+        `notifications_seen_${email}`,
+        JSON.stringify(Array.from(setOfIds)),
+      );
+    } catch (e) {
+      console.warn('saveSeenIds err', e);
+    }
+  }
+  async function loadStoredNotifications(email) {
+    if (!email) return [];
+    try {
+      const raw = await AsyncStorage.getItem(`notifications_store_${email}`);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) {
+      console.warn('loadStoredNotifications err', e);
+      return [];
+    }
+  }
+  async function saveStoredNotifications(email, arr) {
+    if (!email) return;
+    try {
+      await AsyncStorage.setItem(
+        `notifications_store_${email}`,
+        JSON.stringify(arr.slice(0, MAX_STORE)),
+      );
+    } catch (e) {
+      console.warn('saveStoredNotifications err', e);
+    }
+  }
+
+  function paymentUniqueId(saleId, payment, idx) {
+    const part =
+      payment?.payment_transaction_id ??
+      payment?.payment_id ??
+      payment?.fecha_creacion ??
+      payment?.fecha_pago ??
+      String(payment?.amount ?? '') + `_${idx}`;
+    return `${String(saleId)}_${String(part)}`;
+  }
+
+  function todayIso() {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function formatMoney(n) {
+    return Number.isFinite(n)
+      ? n.toLocaleString('es-MX', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+      : '0.00';
+  }
+
+  function buildNotificationText({branch, amount, date, saleId}) {
+    try {
+      const dt = new Date(date).toLocaleString('es-MX', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      });
+      return `Pago confirmado — ${formatMoney(Number(amount || 0))} — ${dt}`;
+    } catch (e) {
+      return `Pago confirmado — ${formatMoney(Number(amount || 0))}`;
+    }
+  }
+
+  async function fetchTodayNotificationsOnce() {
+    try {
+      const email =
+        emailRef.current ?? (await AsyncStorage.getItem('user_email'));
+      if (!email) return;
+      emailRef.current = email;
+
+      const base = API_BASE_URL.replace(/\/$/, '');
+      const day = todayIso();
+      const url = `${base}/api/mobileapp/usuarios/consumos?email=${encodeURIComponent(
+        email,
+      )}&desde=${day}&hasta=${day}`;
+
+      const headers = {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      };
+      if (API_AUTH_TOKEN && API_AUTH_TOKEN.trim())
+        headers['Authorization'] = `Bearer ${API_AUTH_TOKEN}`;
+
+      let res = null;
+      try {
+        res = await fetch(url, {method: 'GET', headers});
+      } catch (err) {
         return;
       }
+      if (!res || !res.ok) return;
+      const json = await res.json();
+      const ventas = Array.isArray(json?.venta_id)
+        ? json.venta_id
+        : Array.isArray(json?.ventas)
+        ? json.ventas
+        : [];
+      if (!Array.isArray(ventas) || ventas.length === 0) return;
 
-      // si nos pasan un id, buscar en storage
-      const id = route?.params?.visitId ?? route?.params?.id ?? null;
-      if (id) {
-        try {
-          const raw = await AsyncStorage.getItem(VISITS_STORAGE_KEY);
-          const arr = parseVisitsRaw(raw);
-          const found = arr.find(a => {
-            try {
-              return (
-                String(a?.id) === String(id) ||
-                String(a?.sale_id) === String(id) ||
-                String(a?.saleId) === String(id)
-              );
-            } catch (e) {
-              return false;
-            }
-          });
-          if (found) {
-            setVisit(found);
-            try {
-              await tryFetchSplits(found);
-            } catch (e) {
-              /* noop */
+      const seenSet = await loadSeenIds(email);
+      const stored = await loadStoredNotifications(email);
+      const storedById = new Map(stored.map(n => [n.id, n]));
+
+      let added = false;
+
+      for (const venta of ventas) {
+        const saleId =
+          venta?.venta_id ?? venta?.sale_id ?? venta?.ventaId ?? null;
+        const pagos = Array.isArray(venta?.pagos) ? venta.pagos : [];
+        if (
+          (!Array.isArray(pagos) || pagos.length === 0) &&
+          Array.isArray(venta?.items_consumidos)
+        ) {
+          const items = venta.items_consumidos;
+          for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const state = String(item?.estado ?? '').toLowerCase();
+            if (state === 'paid' || state === 'confirmed') {
+              const unique = paymentUniqueId(saleId, item, i);
+              if (seenSet.has(unique) || storedById.has(unique)) continue;
+              const amount =
+                item?.precio_unitario ??
+                item?.subtotal ??
+                item?.precio ??
+                item?.amount ??
+                0;
+              const date =
+                item?.fecha_pago ??
+                item?.fecha_creacion ??
+                venta?.fecha_cierre_venta ??
+                new Date().toISOString();
+              const branch =
+                venta?.nombre_sucursal ??
+                venta?.nombre_restaurante ??
+                item?.nombre_sucursal ??
+                '';
+
+              const branchId =
+                venta?.sucursal_id ??
+                venta?.sucursal ??
+                venta?.sucursalId ??
+                venta?.branch_id ??
+                venta?.branchId ??
+                item?.sucursal_id ??
+                item?.sucursalId ??
+                item?.branch_id ??
+                item?.branchId ??
+                null;
+              const splitsUrl =
+                saleId && branchId
+                  ? `${base}/api/transacciones-pago/sucursal/${encodeURIComponent(
+                      branchId,
+                    )}/ventas/${encodeURIComponent(saleId)}/splits`
+                  : null;
+
+              const notif = {
+                id: unique,
+                text: buildNotificationText({branch, amount, date, saleId}),
+                amount: Number(amount || 0),
+                branch: branch || '',
+                branchId: branchId ?? null,
+                date,
+                saleId,
+                url: splitsUrl,
+                read: false,
+              };
+              stored.unshift(notif);
+              storedById.set(unique, notif);
+              seenSet.add(unique);
+              added = true;
             }
           }
-        } catch (e) {
-          console.warn('DetailScreen load visit err', e);
+          continue;
+        }
+
+        for (let i = 0; i < pagos.length; i++) {
+          const pago = pagos[i];
+          const status = String(
+            pago?.status ?? pago?.estado ?? '',
+          ).toLowerCase();
+          if (status !== 'confirmed' && status !== 'paid') continue;
+          const unique = paymentUniqueId(saleId, pago, i);
+          if (seenSet.has(unique) || storedById.has(unique)) continue;
+          const amount =
+            pago?.amount ??
+            pago?.precio_unitario ??
+            pago?.subtotal ??
+            pago?.monto_propina ??
+            0;
+          const date =
+            pago?.fecha_creacion ??
+            pago?.fecha_pago ??
+            venta?.fecha_cierre_venta ??
+            new Date().toISOString();
+          const branch =
+            venta?.nombre_sucursal ??
+            venta?.nombre_restaurante ??
+            pago?.nombre_sucursal ??
+            '';
+
+          const branchId =
+            venta?.sucursal_id ??
+            venta?.sucursal ??
+            venta?.sucursalId ??
+            venta?.branch_id ??
+            venta?.branchId ??
+            pago?.sucursal_id ??
+            pago?.sucursalId ??
+            pago?.branch_id ??
+            pago?.branchId ??
+            null;
+          const splitsUrl =
+            saleId && branchId
+              ? `${base}/api/transacciones-pago/sucursal/${encodeURIComponent(
+                  branchId,
+                )}/ventas/${encodeURIComponent(saleId)}/splits`
+              : null;
+
+          const notif = {
+            id: unique,
+            text: buildNotificationText({branch, amount, date, saleId}),
+            amount: Number(amount || 0),
+            branch: branch || '',
+            branchId: branchId ?? null,
+            date,
+            saleId,
+            url: splitsUrl,
+            read: false,
+          };
+          stored.unshift(notif);
+          storedById.set(unique, notif);
+          seenSet.add(unique);
+          added = true;
         }
       }
-      setLoading(false);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route]);
 
-  // función tolerantísima para parsear lo que haya en storage bajo VISITS_STORAGE_KEY
+      if (added) {
+        const uniq = Array.from(storedById.values())
+          .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+          .slice(0, MAX_STORE);
+        await saveSeenIds(email, seenSet);
+        await saveStoredNotifications(email, uniq);
+        if (isMountedRef.current) setNotifications(uniq);
+      } else {
+        if (isMountedRef.current) {
+          const sorted = stored
+            .slice()
+            .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+            .slice(0, MAX_STORE);
+          setNotifications(sorted);
+        }
+      }
+    } catch (err) {
+      console.warn('fetchTodayNotificationsOnce error', err);
+    }
+  }
+
+  const markAllRead = async () => {
+    try {
+      const email =
+        emailRef.current ?? (await AsyncStorage.getItem('user_email'));
+      const updated = notifications.map(n => ({...n, read: true}));
+      setNotifications(updated);
+      if (email) {
+        await saveStoredNotifications(email, updated);
+      }
+    } catch (e) {
+      console.warn('markAllRead err', e);
+    }
+  };
+
+  const markNotificationAsRead = async notifId => {
+    try {
+      const email =
+        emailRef.current ?? (await AsyncStorage.getItem('user_email'));
+      const updated = notifications.map(n =>
+        n.id === notifId ? {...n, read: true} : n,
+      );
+      setNotifications(updated);
+      if (email) {
+        await saveStoredNotifications(email, updated);
+      }
+    } catch (e) {
+      console.warn('markNotificationAsRead err', e);
+    }
+  };
+
   function parseVisitsRaw(raw) {
     if (!raw) return [];
-    // si ya es un array (p. ej. en algunos entornos AsyncStorage puede devolver objeto), manejarlo
     if (Array.isArray(raw)) return raw;
-    // Si raw ya es un objeto serializable (caso raro), convertir a array
     if (typeof raw === 'object' && raw !== null) {
       try {
         return Object.values(raw);
@@ -193,11 +483,8 @@ export default function DetailScreen({navigation, route}) {
         return [];
       }
     }
-
     const str = String(raw).trim();
     if (!str) return [];
-
-    // intento normal JSON.parse
     try {
       const parsed = JSON.parse(str);
       if (Array.isArray(parsed)) return parsed;
@@ -205,10 +492,8 @@ export default function DetailScreen({navigation, route}) {
         return Object.values(parsed);
       }
     } catch (e) {
-      // intentar recuperar múltiples objetos JSON pegados o líneas con JSON
       const recovered = [];
       try {
-        // buscar bloques JSON con regex (bastante tolerante)
         const matches = str.match(/\{[^}]*\}/g);
         if (matches && matches.length > 0) {
           for (const m of matches) {
@@ -223,8 +508,6 @@ export default function DetailScreen({navigation, route}) {
       } catch (er) {
         /* ignore */
       }
-
-      // intentar separar por líneas y parsear cada línea
       try {
         const lines = str
           .split(/\r?\n/)
@@ -239,8 +522,6 @@ export default function DetailScreen({navigation, route}) {
         }
         if (recovered.length > 0) return recovered;
       } catch (_) {}
-
-      // como último recurso, si la cadena parece un objeto con comillas simples intentar reemplazar comillas simples por dobles
       if (str.startsWith('{') && str.includes(':')) {
         try {
           const alt = str.replace(/'/g, '"');
@@ -250,26 +531,23 @@ export default function DetailScreen({navigation, route}) {
           /* ignore */
         }
       }
-
       return [];
     }
-
     return [];
   }
 
-  // resolveCurrentUserId: lee múltiples keys y soporta casos donde la key contiene JSON
   const resolveCurrentUserId = async () => {
     try {
       const keys = [
         'user_email',
-        'user_usuario_app_id', // <-- prioridad (según tu login)
+        'user_usuario_app_id',
         'user_usuario',
         'email',
         'user_id',
         'userId',
         'user_name',
         'usuario_app_id',
-        'usuario', // por si en storage quedó otro nombre
+        'usuario',
       ];
       for (const k of keys) {
         try {
@@ -277,14 +555,12 @@ export default function DetailScreen({navigation, route}) {
           if (!raw) continue;
           const trimmed = raw.trim();
           if (!trimmed) continue;
-          // si es JSON con campo usuario_app_id u otros, parsearlo
           if (
             (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
             (trimmed.startsWith('[') && trimmed.endsWith(']'))
           ) {
             try {
               const parsed = JSON.parse(trimmed);
-              // buscar variantes dentro del objeto
               const candidateFields = [
                 'usuario_app_id',
                 'user_usuario_app_id',
@@ -299,13 +575,12 @@ export default function DetailScreen({navigation, route}) {
                 if (parsed && parsed[f]) return String(parsed[f]).trim();
               }
             } catch (e) {
-              // no JSON válido, seguir
+              /* ignore */
             }
           }
-          // si no es JSON, devolver el valor directamente
           return trimmed;
         } catch (e) {
-          // ignore key read error
+          /* ignore */
         }
       }
       return null;
@@ -314,7 +589,6 @@ export default function DetailScreen({navigation, route}) {
     }
   };
 
-  // construir lista de candidatos para emparejar items (codigo, id, sku, nombre)
   const itemCandidatesFromVisitItem = it => {
     const raw = it.raw ?? {};
     return [
@@ -332,7 +606,6 @@ export default function DetailScreen({navigation, route}) {
     ].filter(Boolean);
   };
 
-  // fetch splits y construir filteredItems (lo pagado por el usuario actual)
   const tryFetchSplits = async theVisit => {
     if (!theVisit) return;
     const saleId =
@@ -357,7 +630,6 @@ export default function DetailScreen({navigation, route}) {
 
     setIsSplitsLoading(true);
 
-    // resolver current user id
     const curUser = normalize(await resolveCurrentUserId());
     setCurrentUserId(curUser || null);
 
@@ -388,7 +660,6 @@ export default function DetailScreen({navigation, route}) {
 
       const json = await res.json();
 
-      // extraer splits y propinas_por_tx (compatibilidad con distintas formas del endpoint)
       const splitsArr = Array.isArray(json.splits)
         ? json.splits
         : Array.isArray(json.data?.splits)
@@ -407,7 +678,6 @@ export default function DetailScreen({navigation, route}) {
         return;
       }
 
-      // quedarnos solo con paid
       const paidSplits = splitsArr.filter(
         s => String(s.estado ?? '').toLowerCase() === 'paid',
       );
@@ -418,7 +688,6 @@ export default function DetailScreen({navigation, route}) {
         return;
       }
 
-      // match usuario: usar current user id si lo tenemos, sino fallback a posibles properties en la visita
       const visitCandidateUsers = [
         normalize(theVisit.user_email),
         normalize(theVisit.usuario_app_id),
@@ -431,7 +700,6 @@ export default function DetailScreen({navigation, route}) {
 
       const matchIdToUse = curUser || visitCandidateUsers[0] || null;
 
-      // si no tenemos matchIdToUse, no podemos filtrar por usuario: devolvemos null (no filtrar)
       if (!matchIdToUse) {
         setFilteredItems(null);
         setUserPropinaTotal(0);
@@ -439,7 +707,6 @@ export default function DetailScreen({navigation, route}) {
         return;
       }
 
-      // filtrar paid splits por usuario (tolerante)
       const userPaidSplits = paidSplits.filter(p => {
         const uid = normalize(
           p.usuario_app_id ?? p.usuario ?? p.user ?? p.user_id ?? p.user_email,
@@ -448,14 +715,12 @@ export default function DetailScreen({navigation, route}) {
       });
 
       if (!userPaidSplits || userPaidSplits.length === 0) {
-        // no hay paid splits para este usuario -> indicar vacío
         setFilteredItems([]);
         setUserPropinaTotal(0);
         setIsSplitsLoading(false);
         return;
       }
 
-      // Construir lista de payment_transaction_id asociados a lo que pagó el usuario
       const txIdSet = new Set();
       for (const s of userPaidSplits) {
         const tx =
@@ -469,7 +734,6 @@ export default function DetailScreen({navigation, route}) {
           txIdSet.add(String(tx));
       }
 
-      // sumar propinas_por_tx que correspondan a esos transaction ids
       let userTipSum = 0;
       if (
         Array.isArray(propinasArr) &&
@@ -495,7 +759,6 @@ export default function DetailScreen({navigation, route}) {
       userTipSum = +userTipSum.toFixed(2);
       setUserPropinaTotal(userTipSum);
 
-      // construir items desde los splits pagados por el usuario
       const visitItems = Array.isArray(theVisit.items) ? theVisit.items : [];
       const built = [];
 
@@ -508,7 +771,6 @@ export default function DetailScreen({navigation, route}) {
             s.codigoItem ??
             null,
         );
-        const codigoBase = codigoRaw ? String(codigoRaw).split('#')[0] : '';
         const cantidad = safeNum(s.cantidad ?? s.quantity ?? 1) || 1;
         const precio = safeNum(
           s.precio_unitario ?? s.precio ?? s.price ?? s.subtotal ?? 0,
@@ -518,9 +780,8 @@ export default function DetailScreen({navigation, route}) {
           s.nombre ??
           s.item_name ??
           s.title ??
-          `Item ${codigoBase || ''}`;
+          `Item ${codigoRaw || ''}`;
 
-        // intentar hacer match con un item de la visita usando matching robusto
         let matched = null;
         if (visitItems && visitItems.length > 0) {
           for (const it of visitItems) {
@@ -532,10 +793,11 @@ export default function DetailScreen({navigation, route}) {
               matched = it;
               break;
             }
-            if (codigoBase) {
+            if (codigoRaw) {
               const anyBaseMatch = cands.some(c => {
                 const cand = normalize(c).toLowerCase();
                 if (!cand) return false;
+                const codigoBase = String(codigoRaw).split('#')[0];
                 if (cand === codigoBase) return true;
                 if (cand.includes(codigoBase) || codigoBase.includes(cand))
                   return true;
@@ -549,9 +811,13 @@ export default function DetailScreen({navigation, route}) {
           }
         }
 
-        // identificar la propina específica de este split (si existe) -> para info detallada
         const thisTx =
-          s.payment_transaction_id ?? s.paymentTransactionId ?? null;
+          s.payment_transaction_id ??
+          s.paymentTransactionId ??
+          s.payment_transactionId ??
+          s.transaction_id ??
+          s.transactionId ??
+          null;
         let thisSplitTip = 0;
         if (thisTx && Array.isArray(propinasArr)) {
           for (const p of propinasArr) {
@@ -594,7 +860,6 @@ export default function DetailScreen({navigation, route}) {
         }
       }
 
-      // Agrupar items con mismo name/lineTotal (si se repiten) sumando cantidades y lineTotal y sumando splitTip
       const aggregated = [];
       for (const it of built) {
         const key = `${it.name}||${it.unitPrice}`;
@@ -629,10 +894,223 @@ export default function DetailScreen({navigation, route}) {
     }
   };
 
-  // ----- aquí colocamos handleOpenWhatsApp dentro del componente para que tenga acceso a `route` y `visit` -----
+  const formatDateYMD = d => {
+    if (!d) return '';
+    const dt = d instanceof Date ? d : new Date(d);
+    const yyyy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const fetchFullAccount = async (saleId, sucursalId, dateForRange) => {
+    if (!saleId || !sucursalId) {
+      setFullItems([]);
+      return;
+    }
+    setIsFullLoading(true);
+    try {
+      const desde = formatDateYMD(new Date(dateForRange));
+      const hasta = formatDateYMD(new Date(dateForRange));
+      const url = `${API_BASE_URL.replace(
+        /\/$/,
+        '',
+      )}/api/mobileapp/usuarios/consumos?venta_id=${encodeURIComponent(
+        saleId,
+      )}&sucursal_id=${encodeURIComponent(
+        sucursalId,
+      )}&desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(hasta)}`;
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...(API_AUTH_TOKEN
+            ? {Authorization: `Bearer ${API_AUTH_TOKEN}`}
+            : {}),
+        },
+      });
+      if (!res.ok) {
+        console.warn('fetchFullAccount http', res.status);
+        setFullItems([]);
+        setIsFullLoading(false);
+        return;
+      }
+      const json = await res.json().catch(() => null);
+      if (!json) {
+        setFullItems([]);
+        setIsFullLoading(false);
+        return;
+      }
+
+      const gathered = [];
+      const emailsObj = json.emails;
+      if (emailsObj && typeof emailsObj === 'object') {
+        for (const k of Object.keys(emailsObj)) {
+          const arr = Array.isArray(emailsObj[k]) ? emailsObj[k] : [];
+          for (const saleEntry of arr) {
+            const items = Array.isArray(saleEntry.items_consumidos)
+              ? saleEntry.items_consumidos
+              : Array.isArray(saleEntry.items)
+              ? saleEntry.items
+              : [];
+            for (const it of items) {
+              const qty = safeNum(it.cantidad ?? it.quantity ?? 1) || 1;
+              const name =
+                it.nombre_item ??
+                it.nombre ??
+                it.name ??
+                it.item_name ??
+                'Item';
+              const unit =
+                safeNum(
+                  it.precio_unitario ??
+                    it.precio ??
+                    it.price ??
+                    it.unit_price ??
+                    0,
+                ) || 0;
+              gathered.push({
+                name: String(name).trim(),
+                qty,
+                unit,
+                lineTotal: +(qty * unit),
+              });
+            }
+          }
+        }
+      } else {
+        const candidateArrays = [];
+        if (Array.isArray(json.data)) candidateArrays.push(...json.data);
+        if (Array.isArray(json.ventas)) candidateArrays.push(...json.ventas);
+        if (Array.isArray(json)) candidateArrays.push(...json);
+        if (candidateArrays.length === 0) {
+          for (const key of Object.keys(json)) {
+            try {
+              const val = json[key];
+              if (Array.isArray(val)) {
+                candidateArrays.push(...val);
+              }
+            } catch (e) {
+              /* ignore */
+            }
+          }
+        }
+
+        if (candidateArrays.length > 0) {
+          for (const saleEntry of candidateArrays) {
+            const items = Array.isArray(saleEntry.items_consumidos)
+              ? saleEntry.items_consumidos
+              : Array.isArray(saleEntry.items)
+              ? saleEntry.items
+              : [];
+            for (const it of items) {
+              const qty = safeNum(it.cantidad ?? it.quantity ?? 1) || 1;
+              const name =
+                it.nombre_item ??
+                it.nombre ??
+                it.name ??
+                it.item_name ??
+                'Item';
+              const unit =
+                safeNum(
+                  it.precio_unitario ??
+                    it.precio ??
+                    it.price ??
+                    it.unit_price ??
+                    0,
+                ) || 0;
+              gathered.push({
+                name: String(name).trim(),
+                qty,
+                unit,
+                lineTotal: +(qty * unit),
+              });
+            }
+          }
+        }
+      }
+
+      if (gathered.length === 0) {
+        const stack = [json];
+        while (stack.length > 0) {
+          const node = stack.pop();
+          if (!node || typeof node !== 'object') continue;
+          if (Array.isArray(node)) {
+            for (const entry of node) stack.push(entry);
+            continue;
+          }
+          if (Array.isArray(node.items_consumidos)) {
+            for (const it of node.items_consumidos) {
+              const qty = safeNum(it.cantidad ?? it.quantity ?? 1) || 1;
+              const name =
+                it.nombre_item ??
+                it.nombre ??
+                it.name ??
+                it.item_name ??
+                'Item';
+              const unit =
+                safeNum(
+                  it.precio_unitario ??
+                    it.precio ??
+                    it.price ??
+                    it.unit_price ??
+                    0,
+                ) || 0;
+              gathered.push({
+                name: String(name).trim(),
+                qty,
+                unit,
+                lineTotal: +(qty * unit),
+              });
+            }
+          }
+          for (const k of Object.keys(node)) {
+            try {
+              stack.push(node[k]);
+            } catch (e) {
+              /* ignore */
+            }
+          }
+        }
+      }
+
+      const aggregated = [];
+      for (const it of gathered) {
+        const key = `${it.name}||${it.unit}`;
+        const idx = aggregated.findIndex(a => a.key === key);
+        if (idx >= 0) {
+          aggregated[idx].qty += safeNum(it.qty);
+          aggregated[idx].lineTotal = +(
+            aggregated[idx].lineTotal + safeNum(it.lineTotal)
+          ).toFixed(2);
+        } else {
+          aggregated.push({
+            key,
+            name: it.name,
+            qty: safeNum(it.qty),
+            unitPrice: safeNum(it.unit),
+            lineTotal: +safeNum(it.lineTotal).toFixed(2),
+          });
+        }
+      }
+
+      setFullItems(aggregated);
+    } catch (err) {
+      console.warn('fetchFullAccount error', err);
+      setFullItems([]);
+    } finally {
+      setIsFullLoading(false);
+    }
+  };
+
+  const handleBack = () => {
+    navigation.navigate('ExperiencesMain');
+    // or navigation.replace('Welcome');
+  };
+
   const handleOpenWhatsApp = async () => {
     try {
-      // Prioridad: url pasada en params -> url en la visita -> constante por defecto
       const paramUrl =
         route?.params?.whatsapp_url ?? route?.params?.whatsappUrl ?? null;
       const visitUrl =
@@ -649,16 +1127,13 @@ export default function DetailScreen({navigation, route}) {
         return;
       }
 
-      // limpiar/normalizar un poco la URL
       const cleaned = String(urlToOpen)
         .trim()
         .replace(/^"+|"+$/g, '')
         .replace(/^\'+|\'+$/g, '');
 
-      // Intentar abrir (primero canOpenURL por robustez)
       const can = await Linking.canOpenURL(cleaned);
       if (!can) {
-        // fallback: intentar con encodeURI (algunos caracteres podrían romper)
         try {
           const enc = encodeURI(cleaned);
           const can2 = await Linking.canOpenURL(enc);
@@ -682,6 +1157,179 @@ export default function DetailScreen({navigation, route}) {
     } catch (err) {
       console.warn('handleOpenWhatsApp error', err);
       Alert.alert('Error', 'No se pudo abrir WhatsApp. Revisa la URL.');
+    }
+  };
+  useEffect(() => {
+    if (showNotifications) {
+      // reset so it recalculates correctly when modal mounts
+      scrollMetricsRef.current = {y: 0, contentH: 0, layoutH: 0};
+      setShowScrollDown(false);
+    }
+  }, [showNotifications]);
+
+  useEffect(() => {
+    (async () => {
+      if (route?.params?.visit) {
+        setVisit(route.params.visit);
+        setLoading(false);
+        try {
+          await tryFetchSplits(route.params.visit);
+        } catch (e) {
+          /* noop */
+        }
+        return;
+      }
+
+      const id = route?.params?.visitId ?? route?.params?.id ?? null;
+      if (id) {
+        try {
+          const raw = await AsyncStorage.getItem(VISITS_STORAGE_KEY);
+          const arr = parseVisitsRaw(raw);
+          const found = arr.find(a => {
+            try {
+              return (
+                String(a?.id) === String(id) ||
+                String(a?.sale_id) === String(id) ||
+                String(a?.saleId) === String(id)
+              );
+            } catch (e) {
+              return false;
+            }
+          });
+          if (found) {
+            setVisit(found);
+            try {
+              await tryFetchSplits(found);
+            } catch (e) {
+              /* noop */
+            }
+          }
+        } catch (e) {
+          console.warn('DetailScreen load visit err', e);
+        }
+      }
+      setLoading(false);
+    })();
+
+    isMountedRef.current = true;
+    (async () => {
+      const e = await AsyncStorage.getItem('user_email');
+      emailRef.current = e ?? null;
+      if (emailRef.current) {
+        const stored = await loadStoredNotifications(emailRef.current);
+        if (
+          isMountedRef.current &&
+          Array.isArray(stored) &&
+          stored.length > 0
+        ) {
+          const sorted = stored
+            .slice()
+            .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+          setNotifications(sorted);
+        }
+      }
+
+      await fetchTodayNotificationsOnce();
+      const pollSeconds = 12;
+      pollIntervalRef.current = setInterval(() => {
+        fetchTodayNotificationsOnce().catch(err =>
+          console.warn('poll fetch error', err),
+        );
+      }, pollSeconds * 1000);
+    })();
+
+    const focusUnsub = navigation?.addListener
+      ? navigation.addListener('focus', () => {
+          fetchTodayNotificationsOnce().catch(() => {});
+        })
+      : null;
+
+    return () => {
+      isMountedRef.current = false;
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      if (focusUnsub && typeof focusUnsub === 'function') focusUnsub();
+    };
+  }, [route]);
+
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  function NotificationRow({n, onPress}) {
+    const dateLabel = n.date
+      ? new Date(n.date).toLocaleString('es-MX', {
+          dateStyle: 'short',
+          timeStyle: 'short',
+        })
+      : '';
+    return (
+      <TouchableOpacity
+        onPress={onPress}
+        style={[
+          styles.notificationItemLarge,
+          n.read ? styles.readCard : styles.unreadCard,
+        ]}
+        activeOpacity={0.8}>
+        {/* ROW 1: left + right */}
+        <View style={styles.notRowTop}>
+          <Text style={styles.notBranch} numberOfLines={1}>
+            Confirmación de pago:
+          </Text>
+
+          <View style={styles.notRightInline}>
+            <Text style={styles.notAmount} numberOfLines={1}>
+              {formatMoney(n.amount ?? 0)}
+            </Text>
+            <Text style={styles.notCurrency} numberOfLines={1}>
+              MXN
+            </Text>
+          </View>
+        </View>
+
+        {/* ROW 2 */}
+        <Text style={styles.notBranch2} numberOfLines={1}>
+          En {n.branch || `Venta ${n.saleId || ''}`}
+        </Text>
+
+        {/* ROW 3 (optional) */}
+        <Text style={styles.notDate}>{dateLabel}</Text>
+      </TouchableOpacity>
+    );
+  }
+
+  const handleNotificationPress = async n => {
+    try {
+      if (!n) return;
+      if (!n.read) await markNotificationAsRead(n.id);
+
+      setShowNotifications(false);
+
+      if (n.saleId && n.branchId) {
+        try {
+          navigation.navigate('SaleDetail', {
+            saleId: String(n.saleId),
+            branchId: String(n.branchId),
+            branchName: n.branch ?? '',
+          });
+          return;
+        } catch (e) {
+          console.warn('navigate to SaleDetail failed', e);
+        }
+      }
+
+      if (n.url) {
+        try {
+          await Linking.openURL(n.url);
+          return;
+        } catch (e) {
+          console.warn('open url failed', e);
+        }
+      }
+
+      Alert.alert(
+        'Notificación',
+        'Faltan datos de venta o sucursal en esta notificación.',
+      );
+    } catch (err) {
+      console.warn('handleNotificationPress err', err);
     }
   };
 
@@ -714,63 +1362,8 @@ export default function DetailScreen({navigation, route}) {
               paddingVertical: Math.max(10, hp(1.6)),
             },
           ]}>
-          {' '}
-          {/* Modal de notificaciones */}
-          <Modal visible={showNotifications} transparent animationType="slide">
-            <View style={styles.modalOverlay}>
-              <View style={[styles.modalBox, {width: modalWidth}]}>
-                <View style={styles.modalHeader}>
-                  <Text
-                    style={[
-                      styles.modalTitle,
-                      {fontSize: clamp(rf(3.8), 16, 20)},
-                    ]}>
-                    Notificaciones
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => setShowNotifications(false)}
-                    hitSlop={{top: 8, left: 8, right: 8, bottom: 8}}>
-                    <Ionicons name="close" size={iconSize} color="#333" />
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.modalListHeader}>
-                  <Text style={styles.modalListHeaderText}>
-                    Últimas notificaciones
-                  </Text>
-                </View>
-
-                <ScrollView
-                  style={[
-                    styles.modalList,
-                    {maxHeight: Math.round(Math.min(hp(60), 420))},
-                  ]}>
-                  {notifications && notifications.length > 0 ? (
-                    notifications.map(n => <NotificationRow key={n.id} n={n} />)
-                  ) : (
-                    <View style={styles.noNotifications}>
-                      <Text style={styles.noNotificationsText}>
-                        No hay notificaciones nuevas.
-                      </Text>
-                    </View>
-                  )}
-                </ScrollView>
-
-                <TouchableOpacity
-                  style={[styles.markReadButton, {margin: basePadding}]}
-                  onPress={markAllRead}>
-                  <Text
-                    style={[
-                      styles.markReadText,
-                      {fontSize: clamp(rf(3.6), 13, 16)},
-                    ]}>
-                    Marcar todo como leído
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </Modal>
           <TouchableOpacity
-            onPress={() => navigation.goBack()}
+            onPress={handleBack}
             hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
             <Ionicons
               name="arrow-back"
@@ -783,12 +1376,12 @@ export default function DetailScreen({navigation, route}) {
             Experiencias
           </Text>
           <View style={styles.headerIcons}>
-            <TouchableOpacity
+            {/* <TouchableOpacity
               onPress={() => setShowNotifications(true)}
               style={[styles.headerButton, {marginLeft: 16}]}>
               <Ionicons
                 name="notifications-outline"
-                size={clamp(rf(3.6), 20, 28)}
+                size={clamp(rf(2.6), 19, 32)}
                 color="#0051c9"
               />
               {unreadCount > 0 && (
@@ -796,19 +1389,18 @@ export default function DetailScreen({navigation, route}) {
                   <Text style={styles.badgeText}>{unreadCount}</Text>
                 </View>
               )}
-            </TouchableOpacity>
+            </TouchableOpacity> */}
           </View>
         </View>
 
         <View style={{padding: Math.max(12, wp(4))}}>
           <Text>No se encontró la visita seleccionada.</Text>
-          <Button title="Volver" onPress={() => navigation.goBack()} />
+          <Button title="Volver" onPress={handleBack} />
         </View>
       </SafeAreaView>
     );
   }
 
-  // Normalización / lectura de valores numéricos para la visita completa
   const total = safeNum(
     visit.total ??
       visit.amount ??
@@ -817,7 +1409,6 @@ export default function DetailScreen({navigation, route}) {
       0,
   );
 
-  // propina de la visita (si existe)
   const visitPropina = safeNum(
     visit.monto_propina ??
       visit.propina ??
@@ -828,10 +1419,22 @@ export default function DetailScreen({navigation, route}) {
       0,
   );
 
-  // Para CUENTA COMPLETA: calculamos subtotal y iva a partir de visit.total y visitPropina
-  const taxableTotal = Math.max(0, total - visitPropina); // total sin propina
-  const ivaTotal = +((taxableTotal / 1.16) * 0.16).toFixed(2); // IVA incluido => IVA = taxableTotal * rate/(1+rate)
-  const subtotalTotal = +(taxableTotal - ivaTotal).toFixed(2); // subtotal = taxableTotal - IVA
+  const taxableTotal = Math.max(0, total - visitPropina);
+  const ivaTotal = +((taxableTotal / 1.16) * 0.16).toFixed(2);
+  const subtotalTotal = +(taxableTotal - ivaTotal).toFixed(2);
+
+  const computeFullTotals = () => {
+    if (!Array.isArray(fullItems) || fullItems.length === 0)
+      return {subtotal: 0, iva: 0, total: 0};
+    const totalFromItems = fullItems.reduce(
+      (s, it) => s + safeNum(it.lineTotal ?? it.qty * (it.unitPrice ?? 0)),
+      0,
+    );
+    const iva = +((totalFromItems / 1.16) * 0.16).toFixed(2);
+    const subtotal = +(totalFromItems - iva).toFixed(2);
+    return {subtotal, iva, total: +(subtotal + iva).toFixed(2)};
+  };
+  const fullTotals = computeFullTotals();
 
   const shouldShowFiltered =
     !showFull && Array.isArray(filteredItems) && filteredItems.length > 0;
@@ -874,19 +1477,39 @@ export default function DetailScreen({navigation, route}) {
 
   const filteredTotals = shouldShowFiltered ? computeFilteredTotals() : null;
 
-  /* RESPONSIVE computed values */
   const contentPadding = Math.max(12, wp(4));
-  const logoSize = clamp(Math.round(wp(18)), 40, 100);
   const totalLogoWrapperSize = clamp(Math.round(wp(20)), 48, 90);
   const totalAmountFont = clamp(rf(7), 18, 34);
   const sectionHeadingFont = clamp(rf(3.6), 16, 22);
   const itemFont = clamp(rf(2.8), 12, 16);
   const itemPriceFont = clamp(rf(3), 12, 16);
   const btnPaddingVert = Math.max(8, hp(1.2));
-  const modalWidth = Math.min(width * 0.92, 720);
+  const modalWidth = Math.min(Math.max(wp(90), 300), 920);
 
-  const basePadding = clamp(Math.round(width * 0.04), 10, 28);
-  const iconSize = Math.round(clamp(rf(2.6), 19, 32));
+  const handleToggleFull = async () => {
+    const newShow = !showFull;
+    setShowFull(newShow);
+
+    if (newShow) {
+      if (fullItems === null) {
+        const saleId =
+          visit.sale_id ??
+          visit.venta_id ??
+          visit.id ??
+          visit.saleId ??
+          visit.ventaId ??
+          null;
+        const sucursalId =
+          visit.sucursal_id ??
+          visit.sucursalId ??
+          visit.sucursal ??
+          visit.branchId ??
+          null;
+        const dateForRange = visit.fecha ?? new Date();
+        await fetchFullAccount(saleId, sucursalId, dateForRange);
+      }
+    }
+  };
 
   return (
     <SafeAreaView
@@ -904,13 +1527,12 @@ export default function DetailScreen({navigation, route}) {
           <View style={[styles.modalBox, {width: modalWidth}]}>
             <View style={styles.modalHeader}>
               <Text
-                style={[
-                  styles.modalHeaderText,
-                  {fontSize: clamp(rf(3.6), 16, 20)},
-                ]}>
-                Notificaciones
+                style={[styles.modalTitle, {fontSize: clamp(rf(3.6), 16, 20)}]}>
+                Últimas notificaciones
               </Text>
-              <TouchableOpacity onPress={() => setShowNotifications(false)}>
+              <TouchableOpacity
+                onPress={() => setShowNotifications(false)}
+                hitSlop={{top: 8, left: 8, right: 8, bottom: 8}}>
                 <Ionicons
                   name="close"
                   size={clamp(rf(3), 16, 22)}
@@ -918,10 +1540,45 @@ export default function DetailScreen({navigation, route}) {
                 />
               </TouchableOpacity>
             </View>
+
+            {/*  <View style={styles.modalListHeader}>
+              <Text style={styles.modalListHeaderText}>
+                Últimas notificaciones
+              </Text>
+            </View> */}
+            <TouchableOpacity onPress={markAllRead}>
+              {/*                 <Text style={styles.markAllText}>Marcar todo leído</Text>*/}
+            </TouchableOpacity>
+
             <ScrollView
-              style={[styles.modalList, {maxHeight: Math.round(hp(40))}]}>
+              ref={notifScrollRef}
+              style={[
+                styles.modalList,
+                {maxHeight: Math.round(Math.min(hp(35), 420))},
+              ]}
+              onLayout={e => {
+                scrollMetricsRef.current.layoutH =
+                  e.nativeEvent.layout.height || 0;
+                recomputeShowChevron();
+              }}
+              onContentSizeChange={(w, h) => {
+                scrollMetricsRef.current.contentH = h || 0;
+                recomputeShowChevron();
+              }}
+              onScroll={e => {
+                scrollMetricsRef.current.y = e.nativeEvent.contentOffset.y || 0;
+                recomputeShowChevron();
+              }}
+              scrollEventThrottle={16}
+              showsVerticalScrollIndicator>
               {notifications && notifications.length > 0 ? (
-                notifications.map(n => <NotificationRow key={n.id} n={n} />)
+                notifications.map(n => (
+                  <NotificationRow
+                    key={n.id}
+                    n={n}
+                    onPress={() => handleNotificationPress(n)}
+                  />
+                ))
               ) : (
                 <View style={styles.noNotifications}>
                   <Text style={styles.noNotificationsText}>
@@ -930,9 +1587,28 @@ export default function DetailScreen({navigation, route}) {
                 </View>
               )}
             </ScrollView>
+            {showScrollDown && notifications?.length > 0 && (
+              <TouchableOpacity
+                style={styles.scrollDownFab}
+                activeOpacity={0.85}
+                onPress={() => {
+                  const {contentH, layoutH} = scrollMetricsRef.current;
+                  const yBottom = Math.max(0, contentH - layoutH);
+                  notifScrollRef.current?.scrollTo({
+                    y: yBottom,
+                    animated: true,
+                  });
+                }}
+                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+                <Ionicons name="chevron-down" size={19} color="#333" />
+              </TouchableOpacity>
+            )}
 
-            <TouchableOpacity
-              style={[styles.markReadButton, {margin: basePadding}]}
+            {/*  <TouchableOpacity
+              style={[
+                styles.markReadButton,
+                {margin: Math.round(Math.min(Math.max(wp(4), 10), 28))},
+              ]}
               onPress={markAllRead}>
               <Text
                 style={[
@@ -941,7 +1617,7 @@ export default function DetailScreen({navigation, route}) {
                 ]}>
                 Marcar todo como leído
               </Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
           </View>
         </View>
       </Modal>
@@ -950,12 +1626,13 @@ export default function DetailScreen({navigation, route}) {
         style={[
           styles.header,
           {
-            paddingHorizontal: basePadding,
+            paddingHorizontal: Math.max(12, wp(4)),
             paddingVertical: Math.max(10, hp(1.6)),
           },
         ]}>
         <TouchableOpacity
-          onPress={() => navigation.goBack()}
+          style={styles.headerLeftBtn}
+          onPress={handleBack}
           hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
           <Ionicons
             name="arrow-back"
@@ -963,30 +1640,17 @@ export default function DetailScreen({navigation, route}) {
             color={styles.headerTitle.color}
           />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, {fontSize: clamp(rf(4.0), 18, 24)}]}>
+
+        <Text
+          style={[styles.headerTitle, {fontSize: clamp(rf(4.0), 18, 24)}]}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+          pointerEvents="none">
           Experiencias
         </Text>
+
         <View style={styles.headerRight}>
-          <TouchableOpacity
-            onPress={() => setShowNotifications(true)}
-            style={[styles.headerButton, {marginLeft: 16}]}>
-            <Ionicons
-              name="notifications-outline"
-              size={30}
-              color="#0051c9"
-              hitSlop={{top: 8, left: 8, right: 8, bottom: 8}}></Ionicons>
-            {unreadCount > 0 && (
-              <View style={[styles.badge, {right: 5, top: 1}]}>
-                <Text
-                  style={[
-                    styles.badgeText,
-                    {fontSize: clamp(rf(2.6), 15, 20)},
-                  ]}>
-                  {unreadCount}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
+          {/* your right-side icons/buttons here */}
         </View>
       </View>
 
@@ -1008,13 +1672,12 @@ export default function DetailScreen({navigation, route}) {
                 height: totalLogoWrapperSize,
                 borderRadius: Math.round(totalLogoWrapperSize / 2),
                 marginRight: Math.max(8, wp(3)),
-                overflow: 'hidden', // <<--- important: clip image to circle
+                overflow: 'hidden',
               },
             ]}>
             {visit.restaurantImage ? (
               <Image
                 source={{uri: visit.restaurantImage}}
-                // fill the wrapper circle exactly
                 style={{
                   width: '100%',
                   height: '100%',
@@ -1054,7 +1717,9 @@ export default function DetailScreen({navigation, route}) {
                 styles.totalSubtitle,
                 {fontSize: clamp(rf(2.4), 11, 14)},
               ]}>
-              {shouldShowFiltered
+              {showFull
+                ? 'Cuenta completa'
+                : shouldShowFiltered
                 ? 'Detalle - lo que pagaste'
                 : 'Cuenta completa'}
             </Text>
@@ -1080,7 +1745,7 @@ export default function DetailScreen({navigation, route}) {
         {shouldShowFiltered ? (
           <>
             {filteredItems.map((it, i) => (
-              <View key={i} style={styles.itemRow}>
+              <View key={it.key ?? i} style={styles.itemRow}>
                 <Text style={[styles.itemName, {fontSize: itemFont}]}>
                   {it.name}
                 </Text>
@@ -1149,49 +1814,117 @@ export default function DetailScreen({navigation, route}) {
             </Text>
           </View>
         ) : (
-          // Vista completa (comportamiento original)
           <>
-            {Array.isArray(visit.items) && visit.items.length > 0 ? (
-              visit.items.map((it, i) => (
-                <View key={i} style={styles.itemRow}>
+            {showFull ? (
+              <>
+                {isFullLoading ? (
+                  <View style={{padding: 12, alignItems: 'center'}}>
+                    <ActivityIndicator size="small" color="#0046ff" />
+                    <Text style={{marginTop: 8, color: '#444'}}>
+                      Obteniendo cuenta completa…
+                    </Text>
+                  </View>
+                ) : (
+                  <>
+                    {Array.isArray(fullItems) && fullItems.length > 0 ? (
+                      fullItems.map((it, idx) => (
+                        <View
+                          key={it.key ?? `full_${idx}`}
+                          style={styles.itemRow}>
+                          <Text style={[styles.itemName, {fontSize: itemFont}]}>
+                            {it.name}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.itemPrice,
+                              {fontSize: itemPriceFont},
+                            ]}>
+                            {Number(it.lineTotal ?? 0).toFixed(2)}{' '}
+                            {visit.moneda ?? 'MXN'}
+                          </Text>
+                        </View>
+                      ))
+                    ) : (
+                      <View style={{padding: 8}}>
+                        <Text style={{color: '#666'}}>
+                          No se encontraron items en la cuenta completa.
+                        </Text>
+                      </View>
+                    )}
+
+                    <View style={styles.dottedDivider} />
+
+                    <View style={styles.itemRow}>
+                      <Text style={[styles.itemName, {fontSize: itemFont}]}>
+                        Subtotal
+                      </Text>
+                      <Text
+                        style={[styles.itemPrice, {fontSize: itemPriceFont}]}>
+                        ${fullTotals.subtotal.toFixed(2)}{' '}
+                        {visit.moneda ?? 'MXN'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.itemRow}>
+                      <Text style={[styles.itemName, {fontSize: itemFont}]}>
+                        IVA
+                      </Text>
+                      <Text
+                        style={[styles.itemPrice, {fontSize: itemPriceFont}]}>
+                        ${fullTotals.iva.toFixed(2)} {visit.moneda ?? 'MXN'}
+                      </Text>
+                    </View>
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                {Array.isArray(visit.items) && visit.items.length > 0 ? (
+                  visit.items.map((it, i) => (
+                    <View key={i} style={styles.itemRow}>
+                      <Text style={[styles.itemName, {fontSize: itemFont}]}>
+                        {it.name ?? it.nombre ?? `Item ${i + 1}`}
+                      </Text>
+                      <Text
+                        style={[styles.itemPrice, {fontSize: itemPriceFont}]}>
+                        {Number(
+                          it.lineTotal ??
+                            it.unitPrice ??
+                            it.price ??
+                            it.amount ??
+                            0,
+                        ).toFixed(2)}{' '}
+                        {visit.moneda ?? 'MXN'}
+                      </Text>
+                    </View>
+                  ))
+                ) : (
+                  <View style={{padding: 8}}>
+                    <Text style={{color: '#666'}}>No hay items grabados.</Text>
+                  </View>
+                )}
+
+                <View style={styles.dottedDivider} />
+
+                <View style={styles.itemRow}>
                   <Text style={[styles.itemName, {fontSize: itemFont}]}>
-                    {it.name ?? it.nombre ?? `Item ${i + 1}`}
+                    Subtotal
                   </Text>
                   <Text style={[styles.itemPrice, {fontSize: itemPriceFont}]}>
-                    {Number(
-                      it.lineTotal ??
-                        it.unitPrice ??
-                        it.price ??
-                        it.amount ??
-                        0,
-                    ).toFixed(2)}{' '}
-                    {visit.moneda ?? 'MXN'}
+                    ${subtotalTotal.toFixed(2)} {visit.moneda ?? 'MXN'}
                   </Text>
                 </View>
-              ))
-            ) : (
-              <View style={{padding: 8}}>
-                <Text style={{color: '#666'}}>No hay items grabados.</Text>
-              </View>
+
+                <View style={styles.itemRow}>
+                  <Text style={[styles.itemName, {fontSize: itemFont}]}>
+                    IVA
+                  </Text>
+                  <Text style={[styles.itemPrice, {fontSize: itemPriceFont}]}>
+                    ${ivaTotal.toFixed(2)} {visit.moneda ?? 'MXN'}
+                  </Text>
+                </View>
+              </>
             )}
-
-            <View style={styles.dottedDivider} />
-
-            <View style={styles.itemRow}>
-              <Text style={[styles.itemName, {fontSize: itemFont}]}>
-                Subtotal
-              </Text>
-              <Text style={[styles.itemPrice, {fontSize: itemPriceFont}]}>
-                ${subtotalTotal.toFixed(2)} {visit.moneda ?? 'MXN'}
-              </Text>
-            </View>
-
-            <View style={styles.itemRow}>
-              <Text style={[styles.itemName, {fontSize: itemFont}]}>IVA</Text>
-              <Text style={[styles.itemPrice, {fontSize: itemPriceFont}]}>
-                ${ivaTotal.toFixed(2)} {visit.moneda ?? 'MXN'}
-              </Text>
-            </View>
           </>
         )}
 
@@ -1204,7 +1937,7 @@ export default function DetailScreen({navigation, route}) {
                 paddingHorizontal: Math.max(10, wp(3)),
               },
             ]}
-            onPress={() => setShowFull(prev => !prev)}>
+            onPress={handleToggleFull}>
             <Text
               style={[
                 styles.verCuentaBtnText,
@@ -1239,15 +1972,15 @@ export default function DetailScreen({navigation, route}) {
             styles.bottomButtons,
             {marginTop: Math.max(20, hp(3)), marginBottom: Math.max(18, hp(3))},
           ]}>
-          {/*           <TouchableOpacity style={[styles.bottomBtn, { paddingVertical: btnPaddingVert }]} onPress={() => navigation.goBack()}>
-            <Text style={[styles.bottomBtnText, { fontSize: clamp(rf(2.8), 12, 16) }]}>Volver</Text>
-          </TouchableOpacity> */}
-          {/*           <TouchableOpacity style={[styles.bottomBtn, { paddingVertical: btnPaddingVert }]} onPress={() => navigation.navigate('Calificar', { visit })}>
-            <Text style={[styles.bottomBtnText, { fontSize: clamp(rf(2.8), 12, 16) }]}>Calificar</Text>
-          </TouchableOpacity> */}
           <TouchableOpacity
             style={[styles.bottomBtn, {paddingVertical: btnPaddingVert}]}
-            onPress={() => navigation.navigate('Opinion', {visit})}>
+            onPress={() =>
+              navigation.navigate('Opinion', {
+                visit,
+                sale_id: visit.sale_id ?? visit.venta_id,
+                sucursal_id: visit.sucursal_id,
+              })
+            }>
             <Text
               style={[
                 styles.bottomBtnText,
@@ -1261,39 +1994,6 @@ export default function DetailScreen({navigation, route}) {
     </SafeAreaView>
   );
 }
-function NotificationRow({n}) {
-  const dateLabel = n.date
-    ? new Date(n.date).toLocaleString('es-MX', {
-        dateStyle: 'short',
-        timeStyle: 'short',
-      })
-    : '';
-
-  return (
-    <View
-      style={[
-        styles.notificationItemLarge,
-        n.read ? styles.readCard : styles.unreadCard,
-      ]}>
-      <View style={styles.notLeft}>
-        <Text style={styles.notBranch} numberOfLines={1}>
-          {n.branch || `Venta ${n.saleId ?? ''}`}
-        </Text>
-        <Text style={styles.notDate}>{dateLabel}</Text>
-      </View>
-
-      <View style={styles.notRight}>
-        <Text style={styles.notAmount}>
-          {Number(n.amount || 0).toLocaleString('es-MX', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })}
-        </Text>
-        <Text style={styles.notCurrency}>MXN</Text>
-      </View>
-    </View>
-  );
-}
 
 const BLUE = '#0046ff';
 const styles = StyleSheet.create({
@@ -1305,15 +2005,33 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     borderBottomWidth: 1,
     borderBottomColor: BLUE,
+    position: 'relative', // IMPORTANT: enables absolute title inside
   },
-  headerButton: {padding: 0, top: -1, right: 10},
+
+  headerLeftBtn: {
+    zIndex: 2,
+    padding: 8,
+  },
+
+  headerRight: {
+    zIndex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 8, // keeps tap area consistent
+  },
+
   headerTitle: {
-    fontWeight: '700',
-    color: '#0046ff',
+    position: 'absolute',
+    left: 0,
+    right: 0,
     textAlign: 'center',
-    flex: 1,
+    fontWeight: '700',
+    color: BLUE,
     fontFamily: 'Montserrat-Bold',
-    left: 20,
+    zIndex: 1,
+
+    // prevents overlapping the side buttons when title is long
+    marginHorizontal: 56, // tweak (48–72) depending on your icon widths
   },
   headerRight: {flexDirection: 'row', alignItems: 'center'},
   logoFull: {width: 32, height: 32, marginRight: 8, resizeMode: 'contain'},
@@ -1388,7 +2106,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 1,
   },
-  badgeText: {color: '#fff', fontSize: 10},
+  badgeText: {color: '#fff', fontSize: 15},
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -1404,6 +2122,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderColor: '#eee',
   },
+  modalTitle: {fontSize: 18, color: '#000000', fontWeight: '700'},
   modalHeaderText: {fontSize: 18, color: '#000000'},
   modalList: {paddingHorizontal: 16},
   notificationItem: {
@@ -1457,19 +2176,6 @@ const styles = StyleSheet.create({
     color: '#333',
   },
 
-  notificationItemLarge: {
-    flexDirection: 'row',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginVertical: 8,
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: '#eef3ff',
-    backgroundColor: '#fff',
-  },
-
   unreadCard: {
     backgroundColor: '#f2f8ff',
     borderColor: '#d7e8ff',
@@ -1480,43 +2186,40 @@ const styles = StyleSheet.create({
     borderColor: '#f0f0f0',
   },
 
-  notLeft: {
-    flex: 1,
-    paddingRight: 8,
+  notRowTop: {
+    flexDirection: 'row',
+    alignItems: 'baseline', // or 'center'
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 4,
   },
 
-  notRight: {
-    alignItems: 'flex-end',
-    justifyContent: 'center',
+  notRightInline: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6, // if your RN version supports it; otherwise use marginLeft on MXN
   },
 
-  notBranch: {
-    fontWeight: '800',
-    fontSize: 14,
-    color: '#111',
-    marginBottom: 2,
-  },
-
-  notSale: {
-    color: '#666',
-    fontSize: 12,
-    marginBottom: 2,
-  },
-
-  notDate: {
-    color: '#888',
-    fontSize: 11,
-  },
-
+  notLeft: {flex: 1, paddingRight: 8},
+  notRight: {alignItems: 'flex-end', justifyContent: 'center'},
+  notBranch: {fontWeight: '800', fontSize: 14, color: '#111', marginBottom: 2},
+  notBranch2: {fontWeight: '600', fontSize: 14, color: '#111', marginBottom: 2},
+  notDate: {color: '#888', fontSize: 11},
   notAmount: {
     fontWeight: '900',
-    fontSize: 16,
+    fontSize: 18,
     color: '#0b58ff',
   },
-
-  notCurrency: {
-    color: '#666',
-    fontSize: 11,
+  notCurrency: {color: '#666', fontSize: 11},
+  notificationItemLarge: {
+    flexDirection: 'column',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginVertical: 8,
+    borderWidth: 1,
+    borderColor: '#eef3ff',
+    backgroundColor: '#fff',
   },
   markReadButton: {
     padding: 12,
@@ -1571,5 +2274,18 @@ const styles = StyleSheet.create({
   dateBtnPrimaryText: {
     color: '#0046ff',
     fontWeight: '700',
+  },
+  scrollDownFab: {
+    position: 'absolute',
+    right: -1,
+    bottom: 0,
+
+    // no background / no circle
+    backgroundColor: 'transparent',
+
+    // keeps it easy to tap without showing a color
+
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

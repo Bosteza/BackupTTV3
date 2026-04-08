@@ -1,4 +1,4 @@
-//Apple
+//Seems fine 7 April
 import React, {useEffect, useState} from 'react';
 import {
   SafeAreaView,
@@ -11,6 +11,8 @@ import {
   PixelRatio,
   Image,
   TouchableOpacity,
+  Modal,
+  ActivityIndicator,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -20,7 +22,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const BASE = 'https://api.residence.tab-track.com';
 const BASE2 = 'https://api.tab-track.com';
 const TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const AVATAR_GRADIENTS = [
   ['#8E5CFF', '#5B8BFF'],
@@ -39,18 +41,207 @@ function getInitials(name) {
 export default function MiembrosResidence() {
   const {width, height} = useWindowDimensions();
   const hp = p => (p * height) / 100;
-  const headerHeight = Math.round(hp(13.5));
+  const headerHeight = Math.round(hp(20.5));
   const rf = p => Math.round(PixelRatio.roundToNearestPixel((p * width) / 375));
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
   const route = useRoute();
   const navigation = useNavigation();
   const {qr: qrFromParams} = (route && route.params) || {};
 
   const [residents, setResidents] = useState([]);
-  const [departmentLabel, setDepartmentLabel] = useState('Habitación');
+  const [departmentLabel, setDepartmentLabel] = useState('Departamento');
   const [residentCount, setResidentCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [showUnlinkModal, setShowUnlinkModal] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
 
+  const performLogout = async () => {
+    try {
+      const uid = await AsyncStorage.getItem('user_usuario_app_id');
+      const email = await AsyncStorage.getItem('user_email');
+      const currentId = uid || email || null;
+
+      try {
+        if (email) {
+          const profileCached = await AsyncStorage.getItem('user_profile_url');
+          const raw = await AsyncStorage.getItem('recent_accounts_v1');
+          let arr = raw ? JSON.parse(raw) : [];
+          arr = Array.isArray(arr)
+            ? arr.filter(
+                a =>
+                  String(a.email).toLowerCase() !== String(email).toLowerCase(),
+              )
+            : [];
+          arr.unshift({
+            email,
+            avatarUrl: profileCached || null,
+            savedAt: Date.now(),
+          });
+          if (!Array.isArray(arr)) arr = [];
+          if (arr.length > 6) arr = arr.slice(0, 6);
+          try {
+            await AsyncStorage.setItem(
+              'recent_accounts_v1',
+              JSON.stringify(arr),
+            );
+          } catch (e) {
+            console.warn('save recent_accounts failed', e);
+          }
+        }
+      } catch (e) {
+        console.warn('Guardar recent_account failed (pre-clean)', e);
+      }
+
+      const preserveKeys = new Set();
+
+      const visitsBase = 'user_visits';
+      const pendBase = 'pending_visits';
+      if (currentId) {
+        preserveKeys.add(`${visitsBase}_${currentId}`);
+        preserveKeys.add(`${pendBase}_${currentId}`);
+        preserveKeys.add(`favorites_${currentId}`);
+        preserveKeys.add(`favorites_objs_${currentId}`);
+      }
+      preserveKeys.add(visitsBase);
+      preserveKeys.add(pendBase);
+      preserveKeys.add('recent_accounts_v1');
+
+      const branchesPrefix = 'branches_cache_';
+
+      const allKeys = await AsyncStorage.getAllKeys();
+
+      const sessionPrefixes = ['session_', 'sess_', 'tmp_'];
+      const tokenNames = [
+        'auth_token',
+        'access_token',
+        'refresh_token',
+        'token',
+        'user_valid',
+        'user_admin_id_actual',
+        'user_edificio_id_actual',
+        'user_residence_departamento_id_actual',
+        'user_residence_rol_actual',
+        'user_residence_activo',
+        'user_email',
+        'user_fullname',
+        'user_profile_url',
+      ];
+
+      const keysToRemove = allKeys.filter(k => {
+        if (preserveKeys.has(k)) return false;
+        if (k.startsWith(branchesPrefix)) return false;
+        if (tokenNames.includes(k)) return true;
+        for (const p of sessionPrefixes) {
+          if (k.startsWith(p)) return true;
+        }
+        return false;
+      });
+
+      if (keysToRemove.length > 0) {
+        await AsyncStorage.multiRemove(keysToRemove);
+      }
+
+      try {
+        await AsyncStorage.multiRemove([
+          'user_usuario_app_id',
+          'user_email',
+          'user_valid',
+          'user_fullname',
+          'user_profile_url',
+          'user_admin_id_actual',
+          'user_edificio_id_actual',
+          'user_residence_departamento_id_actual',
+          'user_residence_rol_actual',
+          'user_residence_activo',
+        ]);
+      } catch (e) {
+        console.warn('Error removing persistent auth keys on logout', e);
+      }
+
+      try {
+        navigation.reset({
+          index: 0,
+          routes: [{name: 'Recent'}],
+        });
+      } catch (e) {
+        console.warn(
+          'navigate RecentAccounts failed, falling back to Login',
+          e,
+        );
+        try {
+          navigation.reset({
+            index: 0,
+            routes: [{name: 'Login'}],
+          });
+        } catch (_) {}
+      }
+    } catch (err) {
+      console.warn('Error cerrando sesión:', err);
+      try {
+        navigation.reset({
+          index: 0,
+          routes: [{name: 'Login'}],
+        });
+      } catch (_) {}
+    }
+  };
+
+  const handleUnlink = async () => {
+    try {
+      setUnlinking(true);
+
+      const id_admin_raw = await AsyncStorage.getItem('user_admin_id_actual');
+      const id_edificio_raw = await AsyncStorage.getItem(
+        'user_edificio_id_actual',
+      );
+      const mail = await AsyncStorage.getItem('user_email');
+
+      if (!id_admin_raw || !id_edificio_raw || !mail) {
+        throw new Error('Faltan datos para desvincular');
+      }
+
+      const payload = {
+        id_admin: Number(id_admin_raw),
+        id_edificio: Number(id_edificio_raw),
+        mail: String(mail),
+      };
+
+      const res = await fetch(
+        `${BASE}/api/residence/departamentos-usuarios/deactivate`,
+        {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
+          },
+          body: JSON.stringify(payload),
+        },
+      );
+
+      const text = await res.text().catch(() => '');
+      let json = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch (_) {
+        json = null;
+      }
+
+      if (!res.ok) {
+        const message =
+          json?.error || json?.message || text || `HTTP ${res.status}`;
+        throw new Error(message);
+      }
+
+      setShowUnlinkModal(false);
+      await performLogout();
+    } catch (err) {
+      console.warn('Error al desvincular:', err);
+      setUnlinking(false);
+      setShowUnlinkModal(false);
+    }
+  };
   useEffect(() => {
     let mounted = true;
 
@@ -156,7 +347,7 @@ export default function MiembrosResidence() {
         if (mounted) {
           const numeroDepto =
             deptResp?.numero_departamento ?? `${departamento_id}`;
-          setDepartmentLabel(`Habitación ${numeroDepto}`);
+          setDepartmentLabel(`Departamento ${numeroDepto}`);
         }
 
         const usuariosVinculados = Array.isArray(deptResp?.usuarios_vinculados)
@@ -289,7 +480,45 @@ export default function MiembrosResidence() {
       mounted = false;
     };
   }, []); // se ejecuta una vez: usamos AsyncStorage para obtener el departamento
+  const baseScale = width / 375;
+  const headerPaddingTop = clamp(
+    Math.round(rf(12) + (height > 800 ? 6 : 0)),
+    80,
+    90,
+  );
+  const headerPaddingBottom = clamp(
+    Math.round(rf(6) + (height > 800 ? 4 : 0)),
+    12,
+    32,
+  );
+  const headerBorderRadius = Math.round(
+    clamp(rf(20) + Math.floor(baseScale * 4), 12, 36),
+  );
 
+  const titleFont = Math.round(
+    clamp(rf(20) * (1 + (baseScale - 1) * 0.22), 16, 30),
+  );
+  const subtitleFont = Math.round(
+    clamp(rf(12) * (1 + (baseScale - 1) * 0.18), 11, 20),
+  );
+  const nameFont = Math.round(
+    clamp(rf(16) * (1 + (baseScale - 1) * 0.14), 14, 20),
+  );
+  const relationFont = Math.round(clamp(rf(13), 11, 16));
+  const contactFont = Math.round(clamp(rf(13), 11, 16));
+  const avatarInitialsFont = Math.round(clamp(rf(18), 14, 28));
+
+  const avatarSize = clamp(Math.round(56 * baseScale), 44, 92);
+  const rowVerticalPadding = clamp(Math.round(12 * baseScale), 8, 22);
+  const listPadHorizontal = clamp(Math.round(14 * baseScale), 10, 28);
+
+  const contactIconSize = Math.round(
+    clamp(rf(14) * (1 + (baseScale - 1) * 0.1), 12, 22),
+  );
+  const backBtnPadV = clamp(Math.round(10 * baseScale), 8, 16);
+  const backBtnPadH = clamp(Math.round(20 * baseScale), 14, 34);
+  const backBtnMinWidth = clamp(Math.round(140 * baseScale), 110, 260);
+  const dividerMarginTop = Math.round(rowVerticalPadding * 0.9);
   const renderItem = ({item, index}) => {
     const initials = getInitials(item.name);
     const grad = AVATAR_GRADIENTS[index % AVATAR_GRADIENTS.length];
@@ -381,7 +610,29 @@ export default function MiembrosResidence() {
   const ListFooter = () => (
     <View style={{alignItems: 'center', marginVertical: 18}}>
       <TouchableOpacity
-        style={styles.backButton}
+        style={[
+          styles.unlinkButton,
+          {
+            paddingVertical: backBtnPadV,
+            paddingHorizontal: backBtnPadH,
+            minWidth: backBtnMinWidth,
+            marginBottom: 12,
+          },
+        ]}
+        onPress={() => setShowUnlinkModal(true)}
+        activeOpacity={0.85}>
+        <Text style={styles.unlinkButtonText}>Desvincular</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[
+          styles.backButton,
+          {
+            paddingVertical: backBtnPadV,
+            paddingHorizontal: backBtnPadH,
+            minWidth: backBtnMinWidth,
+          },
+        ]}
         onPress={() => {
           try {
             navigation.navigate('QrResidence');
@@ -417,10 +668,10 @@ export default function MiembrosResidence() {
         ]}>
         {' '}
         <View style={styles.encab}>
-          <Text style={[styles.title, {fontSize: rf(18)}]}>
+          <Text style={[styles.title, {fontSize: rf(20)}]}>
             {departmentLabel}
           </Text>
-          <Text style={[styles.subtitle, {fontSize: rf(12)}]}>
+          <Text style={[styles.subtitle, {fontSize: rf(13)}]}>
             {loading
               ? 'Cargando residentes...'
               : `${residentCount} residentes registrados`}
@@ -443,6 +694,44 @@ export default function MiembrosResidence() {
         }
         ListFooterComponent={ListFooter}
       />
+      <Modal
+        visible={showUnlinkModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!unlinking) setShowUnlinkModal(false);
+        }}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>
+              ¿Estás seguro que quieres desvincularte de este departamento?
+            </Text>
+
+            {unlinking ? (
+              <View style={{marginTop: 18, alignItems: 'center'}}>
+                <ActivityIndicator size="large" color="#0046ff" />
+                <Text style={styles.modalLoadingText}>Desvinculando...</Text>
+              </View>
+            ) : (
+              <View style={styles.modalButtonsRow}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalCancelButton]}
+                  onPress={() => setShowUnlinkModal(false)}
+                  activeOpacity={0.85}>
+                  <Text style={styles.modalCancelText}>Cancelar</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalConfirmButton]}
+                  onPress={handleUnlink}
+                  activeOpacity={0.85}>
+                  <Text style={styles.modalConfirmText}>Sí, desvincular</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -545,5 +834,80 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '800',
     fontSize: 15,
+  },
+  unlinkButton: {
+    backgroundColor: '#e11d48',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#fecdd3',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowOffset: {width: 0, height: 2},
+    shadowRadius: 6,
+  },
+  unlinkButtonText: {
+    color: '#ffffff',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    paddingVertical: 22,
+    paddingHorizontal: 18,
+  },
+  modalTitle: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  modalButtonsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 18,
+  },
+  modalButton: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCancelButton: {
+    backgroundColor: '#e5e7eb',
+  },
+  modalConfirmButton: {
+    backgroundColor: '#e11d48',
+  },
+  modalCancelText: {
+    color: '#111827',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  modalConfirmText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  modalLoadingText: {
+    marginTop: 12,
+    color: '#374151',
+    fontWeight: '600',
   },
 });

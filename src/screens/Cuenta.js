@@ -1,3 +1,4 @@
+//Working 2 april
 import React, {useState, useEffect, useRef} from 'react';
 import {
   SafeAreaView,
@@ -22,7 +23,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 const API_URL = 'https://api.tab-track.com/api/mobileapp/usuarios';
 const API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 const VERIF_URL =
   'https://api.tab-track.com/api/mobileapp/usuarios/verification-codes';
 const PRIMARY = '#0046ff';
@@ -126,7 +127,7 @@ export default function Cuenta({navigation}) {
     if (!privacyChecked || !termsChecked) {
       return Alert.alert('Debes aceptar privacidad y términos');
     }
-    if (!nombre || !apellido || !mail || !password || !telefono) {
+    if (!nombre || !apellido || !mail || !password) {
       return Alert.alert('Completa todos los campos obligatorios');
     }
 
@@ -143,7 +144,7 @@ export default function Cuenta({navigation}) {
           apellido,
           mail,
           password,
-          telefono,
+          telefono: telefono.trim() ? telefono : null,
           firma_deslinde: firmaDeslinde,
         }),
       });
@@ -254,6 +255,9 @@ export default function Cuenta({navigation}) {
       <ScrollView
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled">
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Tu cuenta</Text>
+        </View>
         <Image
           source={require('../../assets/images/logo.png')}
           style={styles.logo}
@@ -300,7 +304,7 @@ export default function Cuenta({navigation}) {
             returnKeyType="next"
           />
           <TextInput
-            placeholder="Teléfono"
+            placeholder="Teléfono (opcional)"
             placeholderTextColor="#999"
             style={styles.input}
             keyboardType="phone-pad"
@@ -342,7 +346,7 @@ export default function Cuenta({navigation}) {
 
         <TouchableOpacity style={styles.termsButton} onPress={onPressTerms}>
           <Text style={styles.termsButtonText}>
-            Consulta términos y condiciones
+            Consulta nuestras políticas
           </Text>
         </TouchableOpacity>
 

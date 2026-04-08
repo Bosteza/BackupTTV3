@@ -1,3 +1,4 @@
+//2 april
 import React, {useMemo, useState, useEffect} from 'react';
 import {
   SafeAreaView,
@@ -23,7 +24,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 const API_BASE_URL = 'https://api.tab-track.com';
 const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 const formatMoney = n =>
   Number.isFinite(n)
     ? n.toLocaleString('es-MX', {
@@ -79,6 +80,23 @@ const round2 = v => {
   const n = Number(v || 0);
   return Number.isFinite(n) ? Number(n.toFixed(2)) : 0;
 };
+const toCents = v => Math.round(Number(v || 0) * 100);
+const fromCents = cents => Number((Number(cents || 0) / 100).toFixed(2));
+
+const splitAmountByIndex = (amount, parts, index) => {
+  const safeParts = Math.max(1, Math.floor(Number(parts) || 1));
+  const safeIndex = Math.max(
+    0,
+    Math.min(safeParts - 1, Math.floor(Number(index) || 0)),
+  );
+  const totalCents = toCents(amount);
+  const base = Math.floor(totalCents / safeParts);
+  const remainder = totalCents % safeParts;
+
+  // el centavo sobrante queda para el/los últimos pagos
+  const extra = safeIndex >= safeParts - remainder ? 1 : 0;
+  return fromCents(base + extra);
+};
 
 export default function EqualSplit() {
   const navigation = useNavigation();
@@ -122,17 +140,10 @@ export default function EqualSplit() {
   const incomingIva = parseNumberSafe(incomingIvaRaw);
   const incomingTotal = parseNumberSafe(incomingTotalRaw);
 
-  const [items, setItems] = useState(passedItems ?? null);
-  const [totalComensales, setTotalComensales] = useState(null);
-  const [loading, setLoading] = useState(false);
-
-  const [showPeopleModal, setShowPeopleModal] = useState(false);
-  const [peopleInput, setPeopleInput] = useState('');
-  const [modalConfirmLoading, setModalConfirmLoading] = useState(false);
-
   const saleId =
     route?.params?.saleId ??
     route?.params?.sale_id ??
+    route?.params?.ventaId ??
     route?.params?.venta_id ??
     null;
   const restauranteId =
@@ -145,6 +156,17 @@ export default function EqualSplit() {
   const total_consumo_param =
     route?.params?.total ?? route?.params?.total_consumo ?? null;
 
+  const ventaLookupId =
+    saleId ?? route?.params?.ventaId ?? route?.params?.venta_id ?? null;
+  // Esta es la llave real con la que el API guarda/consulta comensales:
+  // ejemplo: 12|774
+  const comensalesLookupId =
+    saleId != null
+      ? sucursalId != null
+        ? `${String(sucursalId)}|${String(saleId)}`
+        : String(saleId)
+      : null;
+
   const normalizeItem = (raw, fallbackId) => {
     const name = raw?.nombre_item ?? raw?.nombre ?? raw?.name ?? '';
     const price =
@@ -155,82 +177,79 @@ export default function EqualSplit() {
     return {id: String(id), name, price, qty, raw};
   };
 
+  const [items, setItems] = useState(passedItems ?? null);
+  const [totalComensales, setTotalComensales] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const [showPeopleModal, setShowPeopleModal] = useState(false);
+  const [peopleInput, setPeopleInput] = useState('');
+  const [modalConfirmLoading, setModalConfirmLoading] = useState(false);
+
+  const [equalsSplitPaid, setEqualsSplitPaid] = useState(false);
+
+  const [paidSplitCount, setPaidSplitCount] = useState(0);
+  const [showPaidEditAlert, setShowPaidEditAlert] = useState(false);
+
   useEffect(() => {
     let mounted = true;
 
-    const savedKey = saleId
-      ? `equal_split_people_sale_${saleId}`
-      : token
-      ? `equal_split_people_token_${token}`
-      : null;
+    const readComensalesFromServer = async idVenta => {
+      if (!idVenta) return null;
+
+      const base = API_BASE_URL.replace(/\/$/, '');
+      const headers = {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(API_AUTH_TOKEN ? {Authorization: `Bearer ${API_AUTH_TOKEN}`} : {}),
+      };
+
+      const url = `${base}/api/mesas/comensales/${encodeURIComponent(
+        String(idVenta),
+      )}`;
+
+      try {
+        const res = await fetch(url, {method: 'GET', headers});
+        if (!res.ok) return null;
+
+        const json = await res.json();
+
+        const candidates = [
+          json?.numero_comensales,
+          json?.data?.numero_comensales,
+          json?.result?.numero_comensales,
+          json?.comensales?.numero_comensales,
+          Array.isArray(json) ? json?.[0]?.numero_comensales : null,
+          Array.isArray(json?.data) ? json?.data?.[0]?.numero_comensales : null,
+        ];
+
+        for (const candidate of candidates) {
+          const n = Number(candidate);
+          if (Number.isFinite(n) && n > 0) {
+            return n;
+          }
+        }
+      } catch (err) {
+        console.warn(
+          'EqualSplit: error consultando comensales en servidor con',
+          url,
+          err,
+        );
+      }
+
+      return null;
+    };
 
     const fetchSavedPeopleThenItems = async () => {
       let savedN = null;
 
-      if (saleId) {
-        try {
-          const base = API_BASE_URL.replace(/\/$/, '');
-          const url = `${base}/api/mesas/comensales/${encodeURIComponent(
-            saleId,
-          )}`;
-          const res = await fetch(url, {
-            method: 'GET',
-            headers: {
-              Accept: 'application/json',
-              'Content-Type': 'application/json',
-              ...(API_AUTH_TOKEN
-                ? {Authorization: `Bearer ${API_AUTH_TOKEN}`}
-                : {}),
-            },
-          });
-          if (res.ok) {
-            const json = await res.json();
-            const num =
-              json?.numero_comensales ?? json?.numero_comensales ?? null;
-            const parsedNum = Number(num);
-            if (!Number.isNaN(parsedNum) && parsedNum > 0) {
-              savedN = parsedNum;
-              if (mounted) {
-                setTotalComensales(parsedNum);
-                setPeopleInput(String(parsedNum));
-                if (savedKey) {
-                  try {
-                    await AsyncStorage.setItem(savedKey, String(parsedNum));
-                  } catch (e) {
-                    /* ignore */
-                  }
-                }
-              }
-            }
-          }
-        } catch (err) {
-          console.warn(
-            'EqualSplit: error fetching saved comensales from server (fallback to local)',
-            err,
-          );
-        }
-      }
+      if (comensalesLookupId) {
+        savedN = await readComensalesFromServer(comensalesLookupId);
 
-      if (savedN == null) {
-        try {
-          if (savedKey) {
-            const raw = await AsyncStorage.getItem(savedKey);
-            if (raw) {
-              const n = Number(raw);
-              if (!Number.isNaN(n) && n > 0) {
-                savedN = n;
-                if (mounted) {
-                  setTotalComensales(n);
-                  setPeopleInput(String(n));
-                }
-              }
-            }
+        if (savedN != null) {
+          if (mounted) {
+            setTotalComensales(savedN);
+            setPeopleInput(String(savedN));
           }
-        } catch (e) {
-          console.warn(
-            'EqualSplit: error reading saved people from AsyncStorage',
-            e,
-          );
         }
       }
 
@@ -240,6 +259,7 @@ export default function EqualSplit() {
       } else {
         if (!token) {
           if (mounted) setItems([]);
+          if (savedN == null && mounted) setShowPeopleModal(true);
           return;
         }
         setLoading(true);
@@ -262,6 +282,7 @@ export default function EqualSplit() {
           if (!res.ok) {
             console.warn('Error fetch EqualSplit HTTP', res.status);
             setLoading(false);
+            if (savedN == null) setShowPeopleModal(true);
             return;
           }
           const json = await res.json();
@@ -279,15 +300,9 @@ export default function EqualSplit() {
         }
       }
 
-      setTimeout(() => {
-        if (!mounted) return;
-        if (
-          savedN == null &&
-          (totalComensales === null || totalComensales === undefined)
-        ) {
-          setShowPeopleModal(true);
-        }
-      }, 120);
+      if (savedN == null && mounted) {
+        setShowPeopleModal(true);
+      }
     };
 
     fetchSavedPeopleThenItems();
@@ -295,7 +310,83 @@ export default function EqualSplit() {
     return () => {
       mounted = false;
     };
-  }, [token, saleId]);
+  }, [token, saleId, ventaLookupId, comensalesLookupId]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!ventaLookupId) return;
+      const key = `equal_split_paid_${String(ventaLookupId)}`;
+      try {
+        // 1) revisar AsyncStorage primero (reacción inmediata en este dispositivo)
+        const rawLocal = await AsyncStorage.getItem(key);
+        if (rawLocal === '1') {
+          if (mounted) setEqualsSplitPaid(true);
+          return;
+        }
+
+        // 2) si no está en local, consultar endpoint de splits si tenemos sucursalId
+        if (!sucursalId) return;
+
+        const base = API_BASE_URL.replace(/\/$/, '');
+        const url = `${base}/api/transacciones-pago/sucursal/${encodeURIComponent(
+          String(sucursalId),
+        )}/ventas/${encodeURIComponent(String(ventaLookupId))}/splits`;
+        try {
+          const res = await fetch(url, {
+            method: 'GET',
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+              ...(API_AUTH_TOKEN
+                ? {Authorization: `Bearer ${API_AUTH_TOKEN}`}
+                : {}),
+            },
+          });
+          if (!res || !res.ok) return;
+          const sj = await res.json();
+          const splitsArr = Array.isArray(sj.splits) ? sj.splits : [];
+          const paidSplits = splitsArr.filter(
+            s => String(s.estado ?? '').toLowerCase() === 'paid',
+          );
+
+          const paidEqualSplits = paidSplits.filter(s => {
+            const code = String(
+              s.codigo_item ?? s.codigo ?? s.code ?? '',
+            ).trim();
+            const name = String(
+              s.nombre_item ?? s.nombre ?? s.name ?? '',
+            ).toLowerCase();
+            return (
+              code === '1' ||
+              /partes iguales|pago por partes iguales|pago por partes/i.test(
+                name,
+              )
+            );
+          });
+
+          if (mounted) setPaidSplitCount(paidEqualSplits.length);
+
+          if (paidEqualSplits.length > 0) {
+            try {
+              await AsyncStorage.setItem(key, '1');
+            } catch (e) {
+              /* ignore */
+            }
+            if (mounted) setEqualsSplitPaid(true);
+          }
+        } catch (e) {
+          console.warn('EqualSplit: error fetching splits', e);
+        }
+      } catch (err) {
+        console.warn('EqualSplit: error checking equal_split flag', err);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [ventaLookupId, sucursalId]);
 
   const itemsSum = useMemo(() => {
     if (!items || !Array.isArray(items)) return 0;
@@ -325,10 +416,25 @@ export default function EqualSplit() {
       ? totalComensales
       : 1;
 
-  const perPersonSubtotal = round2(subtotal / Math.max(1, people));
-  const perPersonIva = round2(iva / Math.max(1, people));
-  const perPersonBaseTotal = round2(total / Math.max(1, people));
-  const perPersonTip = round2(tipAmount / Math.max(1, people));
+  // base exacta por persona en centavos; el sobrante se queda para el último pago
+  const perPersonBaseTotal = splitAmountByIndex(
+    total,
+    Math.max(1, people),
+    Math.max(0, paidSplitCount),
+  );
+  const perPersonSubtotal = splitAmountByIndex(
+    subtotal,
+    Math.max(1, people),
+    Math.max(0, paidSplitCount),
+  );
+  const perPersonIva = splitAmountByIndex(
+    iva,
+    Math.max(1, people),
+    Math.max(0, paidSplitCount),
+  );
+
+  // propina calculada sobre el monto exacto de esa persona
+  const perPersonTip = round2(perPersonBaseTotal * (tipPercent / 100));
   const perPersonTotalWithTip = round2(perPersonBaseTotal + perPersonTip);
 
   const perPersonStr = formatMoney(perPersonTotalWithTip);
@@ -382,6 +488,13 @@ export default function EqualSplit() {
       items,
       people,
       returnScreen: 'EqualSplit',
+      // valores exactos para que Propina no vuelva a repartir con flotantes
+      perPersonSubtotal,
+      perPersonIva,
+      perPersonTotal: perPersonBaseTotal,
+      perPersonTipAmount: perPersonTip,
+      perPersonTotalWithTip,
+
       tipApplied: payloadCommon.tipApplied,
     });
   };
@@ -443,12 +556,6 @@ export default function EqualSplit() {
 
   const hasTipApplied = tipPercent > 0;
 
-  const savedKey = saleId
-    ? `equal_split_people_sale_${saleId}`
-    : token
-    ? `equal_split_people_token_${token}`
-    : null;
-
   const postComensalesToServer = async (idVenta, numero) => {
     try {
       if (!idVenta) {
@@ -456,7 +563,17 @@ export default function EqualSplit() {
       }
       const base = API_BASE_URL.replace(/\/$/, '');
       const url = `${base}/api/mesas/comensales`;
-      const body = {id_venta: idVenta, numero_comensales: Number(numero)};
+
+      const body = {
+        id_venta: String(idVenta),
+        sucursal_id:
+          sucursalId !== null &&
+          sucursalId !== undefined &&
+          String(sucursalId).trim() !== ''
+            ? Number(sucursalId)
+            : null,
+        numero_comensales: Number(numero),
+      };
       const res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -501,13 +618,20 @@ export default function EqualSplit() {
 
     try {
       let serverOk = false;
-      let serverResult = null;
 
       if (saleId) {
         const result = await postComensalesToServer(saleId, n);
-        serverResult = result;
-        if (result.ok) serverOk = true;
-        else {
+        if (result.ok) {
+          serverOk = true;
+
+          const returnedIdVenta = result?.raw?.data?.id_venta;
+          if (returnedIdVenta) {
+            console.log(
+              'EqualSplit: id_venta devuelto por API:',
+              returnedIdVenta,
+            );
+          }
+        } else {
           console.warn(
             'EqualSplit: no se pudo guardar comensales en servidor:',
             result,
@@ -519,15 +643,8 @@ export default function EqualSplit() {
         );
       }
 
-      try {
-        if (savedKey) {
-          await AsyncStorage.setItem(savedKey, String(n));
-        }
-      } catch (e) {
-        console.warn('Error saving equal split people to AsyncStorage', e);
-      }
-
       setTotalComensales(n);
+      setPeopleInput(String(n));
       setShowPeopleModal(false);
 
       if (serverOk) {
@@ -554,6 +671,16 @@ export default function EqualSplit() {
   const handleCancelPeople = () => {
     setShowPeopleModal(false);
     setTotalComensales(1);
+  };
+
+  const handleEditPeoplePress = () => {
+    if (equalsSplitPaid) {
+      setShowPaidEditAlert(true);
+      return;
+    }
+    const curr = totalComensales ?? people;
+    setPeopleInput(String(curr));
+    setShowPeopleModal(true);
   };
 
   const headerGradientPaddingH = Math.round(sidePad);
@@ -680,21 +807,20 @@ export default function EqualSplit() {
                   <Text style={styles.thanksSub}>
                     {people} {people === 1 ? 'persona' : 'personas'}
                   </Text>
-
                   <TouchableOpacity
-                    onPress={() => {
-                      const curr = totalComensales ?? people;
-                      setPeopleInput(String(curr));
-                      setShowPeopleModal(true);
-                    }}
+                    onPress={handleEditPeoplePress}
+                    activeOpacity={0.9}
                     hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
-                    style={{marginLeft: 8}}>
+                    style={[
+                      styles.editPeopleButton,
+                      equalsSplitPaid && styles.editPeopleButtonDisabled,
+                    ]}>
                     <Text
-                      style={{
-                        fontSize: Math.round(clamp(rf(3.4), 14, 18)),
-                        color: 'rgba(255,255,255,0.95)',
-                      }}>
-                      ✏️
+                      style={[
+                        styles.editPeopleButtonText,
+                        equalsSplitPaid && styles.editPeopleButtonTextDisabled,
+                      ]}>
+                      Editar
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -803,7 +929,7 @@ export default function EqualSplit() {
             activeOpacity={0.9}
             hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
             <Text style={styles.primaryButtonText}>
-              {hasTipApplied ? 'Añadir/editar propina' : 'Pagar'}
+              {hasTipApplied ? 'Añadir/editar propina' : 'Continuar'}
             </Text>
           </TouchableOpacity>
 
@@ -865,7 +991,7 @@ export default function EqualSplit() {
 
             <View
               style={{flexDirection: 'row', justifyContent: 'space-between'}}>
-              <TouchableOpacity
+              {/*} <TouchableOpacity
                 onPress={handleCancelPeople}
                 disabled={modalConfirmLoading}
                 style={{
@@ -880,7 +1006,7 @@ export default function EqualSplit() {
                 <Text style={{color: '#374151', fontWeight: '700'}}>
                   Cancelar
                 </Text>
-              </TouchableOpacity>
+              </TouchableOpacity> */}
 
               <TouchableOpacity
                 onPress={handleConfirmPeople}
@@ -903,6 +1029,24 @@ export default function EqualSplit() {
                 )}
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+      <Modal visible={showPaidEditAlert} transparent animationType="fade">
+        <View style={styles.alertOverlay}>
+          <View style={styles.alertCard}>
+            <Text style={styles.alertTitle}>No se puede editar</Text>
+            <Text style={styles.alertMessage}>
+              Ya se realizó un pago y el número de comensales no se puede
+              modificar.
+            </Text>
+
+            <TouchableOpacity
+              style={styles.alertButton}
+              onPress={() => setShowPaidEditAlert(false)}
+              activeOpacity={0.9}>
+              <Text style={styles.alertButtonText}>Aceptar</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -1030,6 +1174,28 @@ function makeStyles({
       marginTop: Math.round(hp(0.6)),
       textAlign: 'right',
     },
+    editPeopleButton: {
+      marginLeft: 8,
+      paddingHorizontal: Math.round(wp(2.6)),
+      paddingVertical: Math.round(hp(0.45)),
+      borderRadius: 999,
+      backgroundColor: 'rgba(255,255,255,0.18)',
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.35)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    editPeopleButtonDisabled: {
+      opacity: 0.35,
+    },
+    editPeopleButtonText: {
+      color: '#fff',
+      fontSize: Math.round(clamp(rf(3.0), 10, 13)),
+      fontWeight: '800',
+    },
+    editPeopleButtonTextDisabled: {
+      color: 'rgba(255,255,255,0.95)',
+    },
 
     content: {
       width:
@@ -1124,5 +1290,50 @@ function makeStyles({
 
     emptyBox: {padding: Math.round(hp(2)), alignItems: 'center'},
     emptyText: {color: '#666'},
+    alertOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+    },
+    alertCard: {
+      width: Math.min(modalWidth, 360),
+      backgroundColor: '#fff',
+      borderRadius: 14,
+      padding: Math.round(sidePad),
+      shadowColor: '#000',
+      shadowOpacity: 0.15,
+      shadowRadius: 14,
+      shadowOffset: {width: 0, height: 8},
+      elevation: 6,
+    },
+    alertTitle: {
+      fontSize: Math.round(clamp(rf(4.6), 16, 20)),
+      fontWeight: '800',
+      color: '#000',
+      marginBottom: Math.round(hp(0.6)),
+    },
+    alertMessage: {
+      color: '#222',
+      fontSize: Math.round(clamp(rf(3.7), 13, 16)),
+      lineHeight: Math.round(clamp(rf(4.3), 18, 22)),
+      marginBottom: Math.round(hp(1.4)),
+    },
+    alertButton: {
+      alignSelf: 'flex-end',
+      minWidth: 110,
+      backgroundColor: '#0046ff',
+      borderRadius: 10,
+      paddingVertical: Math.round(hp(1.1)),
+      paddingHorizontal: Math.round(wp(5)),
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    alertButtonText: {
+      color: '#fff',
+      fontWeight: '800',
+      fontSize: Math.round(clamp(rf(3.7), 13, 16)),
+    },
   });
 }

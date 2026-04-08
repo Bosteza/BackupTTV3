@@ -1,3 +1,4 @@
+/* Works 9 marz*/
 import React, {useState, useRef, useEffect, useCallback} from 'react';
 import {
   View,
@@ -15,19 +16,27 @@ import {
   SafeAreaView,
   Alert,
   ActivityIndicator,
+  Platform,
+  findNodeHandle,
+  UIManager,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import {useNavigation, useFocusEffect} from '@react-navigation/native';
+import {
+  useNavigation,
+  useFocusEffect,
+  useRoute,
+} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {PDFDocument, StandardFonts, rgb} from 'pdf-lib';
 import RNFS from 'react-native-fs';
 import Share from 'react-native-share';
+import fontkit from '@pdf-lib/fontkit';
 
 const API_BASE_FALLBACK = 'https://api.residence.tab-track.com';
 const API_TOKEN_FALLBACK =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const MONTH_NAMES = [
   'Enero',
@@ -46,6 +55,7 @@ const MONTH_NAMES = [
 
 export default function ExperiencesScreen() {
   const navigation = useNavigation();
+  const route = useRoute(); // <--- nuevo: detectamos params entrantes
   const {width, height} = useWindowDimensions();
 
   const wp = p => (p * width) / 100;
@@ -73,9 +83,19 @@ export default function ExperiencesScreen() {
   const [deptId, setDeptId] = useState(null);
   const [monthsData, setMonthsData] = useState([]);
   const [loadingMonths, setLoadingMonths] = useState(false);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
   const [exporting, setExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState('');
-  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  // --- refs para scroll y posicionamiento (nuevos) ---
+  const mainScrollRef = useRef(null);
+  const monthPositionsRef = useRef({}); // { periodo: y }
+  const pendingNotificationRef = useRef(null); // guarda notificacion si llega antes de cargar monthsData
+
+  // refs dentro del sheet para cada transacción (nuevos)
+  const sheetScrollRef = useRef(null);
+  const txPositionsRef = useRef({}); // { txId: y }
 
   useEffect(() => {
     animY.setValue(0);
@@ -282,6 +302,19 @@ export default function ExperiencesScreen() {
       } catch (e) {
         // no bloquear si falla el detalle
         console.warn('[dept-history] detalle fetch error', e);
+      }
+      try {
+        const rotateIndex = new Date().getMonth();
+        if (rotateIndex > 0 && months.length === 12) {
+          const rotated = months
+            .slice(rotateIndex)
+            .concat(months.slice(0, rotateIndex));
+
+          months.length = 0;
+          months.push(...rotated);
+        }
+      } catch (e) {
+        console.warn('[dept-history] rotate months error', e);
       }
 
       setMonthsData(months);
@@ -508,7 +541,104 @@ export default function ExperiencesScreen() {
     fetchYearHistory();
   }, [fetchYearHistory]);
 
-  const openSheetFor = async monthObj => {
+  // --- NEW: procesar params de ruta entrantes (si la app navegó aquí con notificación) ---
+  useEffect(() => {
+    if (route?.params) {
+      const incoming = route.params.notification ?? route.params; // aceptamos {notification:{...}} o directamente params
+      if (
+        incoming &&
+        (incoming.sale_id || incoming.transactionId || incoming.periodo)
+      ) {
+        // guardamos la notificacion para procesarla cuando haya monthsData cargado
+        pendingNotificationRef.current = incoming;
+        // si monthsData ya está listo, procesar ahora
+        if (Array.isArray(monthsData) && monthsData.length > 0) {
+          setTimeout(() => {
+            processPendingNotification();
+          }, 250);
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route?.params]);
+
+  // cuando monthsData cambia y existe pendingNotification, procesarla
+  useEffect(() => {
+    if (
+      pendingNotificationRef.current &&
+      Array.isArray(monthsData) &&
+      monthsData.length > 0
+    ) {
+      setTimeout(() => {
+        processPendingNotification();
+      }, 250);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monthsData]);
+
+  // función que busca el mes y abre modal/tx
+  const processPendingNotification = useCallback(async () => {
+    const notif = pendingNotificationRef.current;
+    if (!notif) return;
+    // limpiamos después de procesar
+    pendingNotificationRef.current = null;
+
+    // determinar periodo objetivo
+    let targetPeriodo = notif.periodo ?? null;
+    if (!targetPeriodo && notif.date) {
+      // si recibimos una fecha, transformarla a yyyyMM
+      try {
+        const d = new Date(notif.date);
+        if (!isNaN(d.getTime())) {
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          targetPeriodo = `${y}${m}`;
+        }
+      } catch (e) {
+        targetPeriodo = null;
+      }
+    }
+
+    // buscar mes en monthsData (busca exacto por periodo o por month+year)
+    let monthObj = null;
+    if (targetPeriodo) {
+      monthObj = monthsData.find(
+        m => String(m.periodo) === String(targetPeriodo),
+      );
+    }
+    if (!monthObj && notif.month && notif.year) {
+      const mm = String(notif.month).padStart(2, '0');
+      const peri = `${notif.year}${mm}`;
+      monthObj = monthsData.find(m => String(m.periodo) === peri);
+    }
+
+    // fallback: si no encontró, usar mes actual (si existe)
+    if (!monthObj && monthsData.length > 0) {
+      monthObj = monthsData[0];
+    }
+    if (!monthObj) return;
+
+    // intentar hacer scroll a la tarjeta del mes en la ScrollView principal
+    try {
+      const y = monthPositionsRef.current[monthObj.periodo];
+      if (mainScrollRef.current && typeof y === 'number') {
+        mainScrollRef.current.scrollTo({
+          y: Math.max(0, y - 20),
+          animated: true,
+        });
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    // abrir sheet y luego expandir transacción indicada
+    await openSheetFor(monthObj, {
+      highlightSaleId: notif.sale_id ?? notif.transactionId ?? null,
+    });
+  }, [monthsData, openSheetFor]);
+
+  // openSheetFor ahora acepta opciones: highlightSaleId
+  const openSheetFor = async (monthObj, opts = {}) => {
     setExpandedTxIds([]);
     setSelectedMonth({...monthObj, consumptions: [], loading: true});
     setSheetVisible(true);
@@ -522,12 +652,64 @@ export default function ExperiencesScreen() {
     const consumptions = await fetchMonthDetail(periodo);
     setSelectedMonth(prev => ({
       ...(prev || {}),
-      consumptions: consumptions || [],
-      loading: false,
+      periodo: monthObj.periodo,
+      month: monthObj.month,
+      year: monthObj.year,
       title: monthObj.title,
+      billing: monthObj.billing ?? prev?.billing ?? null,
+      counts: monthObj.counts ?? prev?.counts ?? null,
       amount: monthObj.amount,
       transactions: monthObj.transactions,
+      consumptions: consumptions || [],
+      loading: false,
     }));
+    // small delay to ensure transactions rendered
+    setTimeout(() => {
+      if (opts.highlightSaleId && Array.isArray(consumptions)) {
+        // buscar transacción por sale_id o id
+        const found = consumptions.find(
+          t =>
+            String(t.sale_id) === String(opts.highlightSaleId) ||
+            String(t.id) === String(opts.highlightSaleId),
+        );
+        if (found) {
+          // expandirla
+          setExpandedTxIds([found.id]);
+          // intentar scrollear dentro del sheet al elemento
+          const yTx = txPositionsRef.current[found.id];
+          if (sheetScrollRef.current && typeof yTx === 'number') {
+            sheetScrollRef.current.scrollTo({
+              y: Math.max(0, yTx - 60),
+              animated: true,
+            });
+          } else {
+            // si no tenemos posición ya medida, intentar medir vía UIManager
+            try {
+              const node = txRefsMap.current[found.id];
+              if (node) {
+                const handle = findNodeHandle(node);
+                if (handle) {
+                  UIManager.measureLayout(
+                    handle,
+                    findNodeHandle(sheetScrollRef.current) || handle,
+                    () => {},
+                    (left, top) => {
+                      if (sheetScrollRef.current)
+                        sheetScrollRef.current.scrollTo({
+                          y: Math.max(0, top - 60),
+                          animated: true,
+                        });
+                    },
+                  );
+                }
+              }
+            } catch (e) {
+              /* ignore */
+            }
+          }
+        }
+      }
+    }, 250);
   };
 
   const closeSheet = () => {
@@ -539,7 +721,48 @@ export default function ExperiencesScreen() {
       setSheetVisible(false);
       setSelectedMonth(null);
       setExpandedTxIds([]);
+      txPositionsRef.current = {};
+      txRefsMap.current = {};
     });
+  };
+
+  //NEWWWWWWWWWWW
+  const FONT_FILE = 'Montserrat-Regular.ttf';
+
+  const normalizePdfText = value => {
+    if (value === null || value === undefined) return '';
+    return (
+      String(value)
+        // Narrow no-break + no-break spaces -> normal space
+        .replace(/[\u202F\u00A0]/g, ' ')
+        // Strip ASCII control chars (keeps layout stable)
+        .replace(/[\u0000-\u001F\u007F]/g, '')
+    );
+  };
+
+  const base64ToUint8Array = b64 => {
+    // RN often has Buffer; fallback to atob otherwise
+    if (typeof Buffer !== 'undefined') {
+      return Uint8Array.from(Buffer.from(b64, 'base64'));
+    }
+    const binary = global.atob(b64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  };
+
+  const readMontserratFontBytes = async () => {
+    if (Platform.OS === 'ios') {
+      // iOS bundle: make sure FONT_FILE is in Xcode target + UIAppFonts
+      const path = `${RNFS.MainBundlePath}/${FONT_FILE}`;
+      const b64 = await RNFS.readFile(path, 'base64');
+      return base64ToUint8Array(b64);
+    }
+
+    // Android assets: android/app/src/main/assets/fonts/Montserrat-Regular.ttf
+    const b64 = await RNFS.readFileAssets(`fonts/${FONT_FILE}`, 'base64');
+    return base64ToUint8Array(b64);
   };
 
   const exportPayment = async payment => {
@@ -558,7 +781,12 @@ export default function ExperiencesScreen() {
       };
 
       const pdfDoc = await PDFDocument.create();
-      const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      pdfDoc.registerFontkit(fontkit);
+
+      // Embed Montserrat (Unicode-capable)
+      const fontBytes = await readMontserratFontBytes();
+      const font = await pdfDoc.embedFont(fontBytes, {subset: true});
+
       const pageSize = [612, 792];
       let page = pdfDoc.addPage(pageSize);
       let {width: pW, height: pH} = page.getSize();
@@ -574,27 +802,28 @@ export default function ExperiencesScreen() {
         color: rgb(0.42, 0.13, 0.66),
         borderRadius: 6,
       });
-      page.drawText('TABTRACK', {
+
+      page.drawText(normalizePdfText('TABTRACK'), {
         x: marginLeft + 13,
         y: y - 6,
         size: 18,
-        font: helvetica,
+        font,
         color: rgb(1, 1, 1),
       });
 
-      page.drawText('Detalle de consumos', {
+      page.drawText(normalizePdfText('Detalle de consumos'), {
         x: marginLeft + 150,
         y: y - 6,
         size: 18,
-        font: helvetica,
+        font,
         color: rgb(0.07, 0.07, 0.07),
       });
 
-      page.drawText(payment.title || payment.periodo || '', {
+      page.drawText(normalizePdfText(payment.title || payment.periodo || ''), {
         x: marginLeft + 150,
         y: y - 26,
         size: 10,
-        font: helvetica,
+        font,
         color: rgb(0.42, 0.42, 0.42),
       });
 
@@ -609,27 +838,37 @@ export default function ExperiencesScreen() {
           y = pH - 60;
         }
 
-        page.drawText(tx.name || 'Transacción', {
+        const txName = normalizePdfText(tx.name || 'Transacción');
+        const txTime = normalizePdfText(
+          tx.timestamp || fmtDate(tx.fecha_apertura) || '',
+        );
+
+        page.drawText(txName, {
           x: marginLeft,
-          y: y,
+          y,
           size: 12,
-          font: helvetica,
+          font,
           color: rgb(0.07, 0.07, 0.07),
         });
-        page.drawText(tx.timestamp || fmtDate(tx.fecha_apertura) || '', {
+
+        page.drawText(txTime, {
           x: pW - marginLeft - 160,
-          y: y,
+          y,
           size: 9,
-          font: helvetica,
+          font,
           color: rgb(0.45, 0.45, 0.45),
         });
+
         y -= 18;
 
         let subtotal = 0;
+
         for (let it of tx.items || []) {
-          const label = `${it.label}${
+          const labelRaw = `${it.label}${
             it.qty && it.qty > 1 ? ` x${it.qty}` : ''
           }`;
+          const label = normalizePdfText(labelRaw);
+
           const totalItem = (Number(it.price) || 0) * (Number(it.qty) || 1);
           subtotal += totalItem;
 
@@ -641,39 +880,45 @@ export default function ExperiencesScreen() {
 
           page.drawText(label, {
             x: marginLeft + 8,
-            y: y,
+            y,
             size: 10,
-            font: helvetica,
+            font,
             color: rgb(0.2, 0.2, 0.2),
           });
-          const priceText = `$${fmtCurrency(totalItem)}`;
-          const textWidth = helvetica.widthOfTextAtSize(priceText, 10);
+
+          const priceText = normalizePdfText(`$${fmtCurrency(totalItem)}`);
+          const textWidth = font.widthOfTextAtSize(priceText, 10);
+
           page.drawText(priceText, {
             x: pW - marginLeft - textWidth,
-            y: y,
+            y,
             size: 10,
-            font: helvetica,
+            font,
             color: rgb(0.07, 0.07, 0.07),
           });
+
           y -= 14;
         }
 
-        page.drawText('Subtotal:', {
+        page.drawText(normalizePdfText('Subtotal:'), {
           x: marginLeft + 8,
           y: y - 6,
           size: 10,
-          font: helvetica,
+          font,
           color: rgb(0.42, 0.13, 0.66),
         });
-        const subtotalText = `$${fmtCurrency(subtotal)}`;
-        const subW = helvetica.widthOfTextAtSize(subtotalText, 10);
+
+        const subtotalText = normalizePdfText(`$${fmtCurrency(subtotal)}`);
+        const subW = font.widthOfTextAtSize(subtotalText, 10);
+
         page.drawText(subtotalText, {
           x: pW - marginLeft - subW,
           y: y - 6,
           size: 10,
-          font: helvetica,
+          font,
           color: rgb(0.07, 0.07, 0.07),
         });
+
         y -= 24;
 
         page.drawLine({
@@ -682,25 +927,31 @@ export default function ExperiencesScreen() {
           thickness: 0.5,
           color: rgb(0.92, 0.92, 0.92),
         });
+
         y -= 12;
       }
 
       if ((consumptions || []).length === 0) {
-        page.drawText('No hay consumos registrados en este periodo.', {
-          x: marginLeft,
-          y: y,
-          size: 12,
-          font: helvetica,
-          color: rgb(0.45, 0.45, 0.45),
-        });
+        page.drawText(
+          normalizePdfText('No hay consumos registrados en este periodo.'),
+          {
+            x: marginLeft,
+            y,
+            size: 12,
+            font,
+            color: rgb(0.45, 0.45, 0.45),
+          },
+        );
       }
 
-      const genText = `Generado el ${new Date().toLocaleString()}`;
+      const genText = normalizePdfText(
+        `Generado el ${new Date().toLocaleString('es-ES')}`,
+      );
       page.drawText(genText, {
         x: marginLeft,
         y: 36,
         size: 9,
-        font: helvetica,
+        font,
         color: rgb(0.45, 0.45, 0.45),
       });
 
@@ -711,6 +962,7 @@ export default function ExperiencesScreen() {
         Platform.OS === 'android'
           ? RNFS.CachesDirectoryPath
           : RNFS.DocumentDirectoryPath;
+
       const filePath = `${dirPath}/${fileName}`;
 
       await RNFS.writeFile(filePath, base64, 'base64');
@@ -725,8 +977,7 @@ export default function ExperiencesScreen() {
       console.warn('exportPayment error:', err);
       Alert.alert(
         'Error',
-        'No fue posible generar/compartir el PDF. Asegúrate de instalar: pdf-lib, react-native-fs y react-native-share y recompilar la app. ' +
-          (err?.message || ''),
+        'No fue posible generar/compartir el PDF. ' + (err?.message || ''),
       );
     } finally {
       setExporting(false);
@@ -748,20 +999,58 @@ export default function ExperiencesScreen() {
       return [...prev, txId];
     });
   };
+  const formatMoney = (n, {currencySign = '', negativeSign = '-'} = {}) => {
+    const num = Number(n);
+    if (!Number.isFinite(num)) return '…';
+
+    const isNeg = num < 0;
+    const absNum = Math.abs(num);
+
+    let formatted;
+    try {
+      if (typeof Intl !== 'undefined' && Intl.NumberFormat) {
+        formatted = new Intl.NumberFormat('en-US', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(absNum);
+      } else {
+        throw new Error('Intl not available');
+      }
+    } catch (err) {
+      const parts = absNum.toFixed(2).split('.');
+      parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      formatted = parts.join('.');
+    }
+
+    return `${isNeg ? negativeSign : ''}${currencySign}${formatted}`;
+  };
+  // refs para cada tx renderizado (para medir posiciones)
+  const txRefsMap = useRef({}); // { txId: ref }
 
   const renderTransaction = tx => {
     const expanded = expandedTxIds.includes(tx.id);
-    const computedSubtotal = (
-      Array.isArray(tx.items)
-        ? tx.items.reduce(
-            (s, it) => s + (Number(it.price) || 0) * (Number(it.qty) || 1),
-            0,
-          )
-        : 0
-    ).toFixed(2);
+    const computedSubtotalNum = Array.isArray(tx.items)
+      ? tx.items.reduce(
+          (s, it) => s + (Number(it.price) || 0) * (Number(it.qty) || 1),
+          0,
+        )
+      : 0;
+    const computedSubtotal = +computedSubtotalNum.toFixed(2);
 
     return (
-      <View key={tx.id} style={sheetStyles.personCard}>
+      <View
+        key={tx.id}
+        style={sheetStyles.personCard}
+        // guardamos la posición Y de cada transacción dentro del sheet para scrollear luego
+        onLayout={ev => {
+          try {
+            const y = ev.nativeEvent.layout.y;
+            txPositionsRef.current[tx.id] = y;
+          } catch (e) {}
+        }}
+        ref={ref => {
+          if (ref) txRefsMap.current[tx.id] = ref;
+        }}>
         <TouchableOpacity
           onPress={() => toggleTxExpand(tx.id)}
           activeOpacity={0.85}
@@ -797,7 +1086,7 @@ export default function ExperiencesScreen() {
 
           <View style={sheetStyles.personRight}>
             <Text style={sheetStyles.personAmount}>
-              ${Number(tx.amount).toFixed(2)}
+              {formatMoney(tx.amount, {currencySign: '$'})}
             </Text>
             <Ionicons
               name={expanded ? 'chevron-up' : 'chevron-down'}
@@ -825,7 +1114,9 @@ export default function ExperiencesScreen() {
                   {it.label} {it.qty && it.qty > 1 ? `x${it.qty}` : ''}
                 </Text>
                 <Text style={sheetStyles.personItemPrice}>
-                  ${Number((it.price || 0) * (it.qty || 1)).toFixed(2)}
+                  {formatMoney((it.price || 0) * (it.qty || 1), {
+                    currencySign: '$',
+                  })}
                 </Text>
               </View>
             ))}
@@ -835,7 +1126,7 @@ export default function ExperiencesScreen() {
             <View style={sheetStyles.personSummaryRow}>
               <Text style={sheetStyles.personSummaryLabel}>Subtotal</Text>
               <Text style={sheetStyles.personSummaryValue}>
-                ${computedSubtotal}
+                {formatMoney(computedSubtotal, {currencySign: '$'})}
               </Text>
             </View>
 
@@ -855,31 +1146,36 @@ export default function ExperiencesScreen() {
     );
   };
 
-  const listData = monthsData.length
-    ? monthsData
-    : [
-        {
-          periodo: `${new Date().getFullYear()}${String(
-            new Date().getMonth() + 1,
-          ).padStart(2, '0')}`,
-          month: new Date().getMonth() + 1,
-          year: new Date().getFullYear(),
-          title: `${
-            MONTH_NAMES[new Date().getMonth()]
-          } ${new Date().getFullYear()}`,
-          billing: null,
-          counts: {closed_count: 0, open_count: 0},
-          amount: 0,
-          transactions: 0,
-          consumptions: [],
-        },
-      ];
+  const listDataFallback = [
+    {
+      periodo: `${new Date().getFullYear()}${String(
+        new Date().getMonth() + 1,
+      ).padStart(2, '0')}`,
+      month: new Date().getMonth() + 1,
+      year: new Date().getFullYear(),
+      title: `${
+        MONTH_NAMES[new Date().getMonth()]
+      } ${new Date().getFullYear()}`,
+      billing: null,
+      counts: {closed_count: 0, open_count: 0},
+      amount: 0,
+      transactions: 0,
+      consumptions: [],
+    },
+  ];
 
   const renderPayment = ({item}) => {
     const isPending = (item.transactions || 0) > 0 && (item.amount || 0) === 0;
     const isHasMov = (item.transactions || 0) > 0;
     return (
-      <View style={{marginBottom: 12}}>
+      <View
+        style={{marginBottom: 12}}
+        onLayout={ev => {
+          try {
+            const y = ev.nativeEvent.layout.y;
+            monthPositionsRef.current[item.periodo] = y;
+          } catch (e) {}
+        }}>
         <View
           style={[
             styles.paymentCard,
@@ -894,7 +1190,7 @@ export default function ExperiencesScreen() {
                   {width: 52, height: 52, borderRadius: 12},
                 ]}>
                 <Ionicons
-                  name="time-outline"
+                  name="cash-outline"
                   size={20}
                   color={isHasMov ? '#7C3AED' : '#94A3B8'}
                 />
@@ -917,7 +1213,7 @@ export default function ExperiencesScreen() {
 
             <View style={{alignItems: 'flex-end', marginLeft: 8}}>
               <Text style={styles.paymentAmount}>
-                ${Number(item.amount).toFixed(2)}
+                {formatMoney(item.amount, {currencySign: '$'})}
               </Text>
 
               {item.transactions > 0 ? (
@@ -971,8 +1267,11 @@ export default function ExperiencesScreen() {
 
   const now = new Date();
   const currentMonthIdx = now.getMonth();
-  let assignedBalance = 3500.0;
-  let consumed = 425.0;
+  const currentPeriodo = `${now.getFullYear()}${String(
+    now.getMonth() + 1,
+  ).padStart(2, '0')}`;
+  let assignedBalance = 0;
+  let consumed = 0;
   let available = assignedBalance - consumed;
   if (Array.isArray(monthsData) && monthsData.length) {
     const cur = monthsData.find(
@@ -998,18 +1297,24 @@ export default function ExperiencesScreen() {
         if (!Number.isNaN(n2)) consumed = n2;
       }
       // saldo_disponible preferible usarlo si está presente (incluso 0)
+      // --- NUEVA LÓGICA: siempre calcular assignedBalance - consumed y usarlo si es negativo ---
+      const computedAvailable = assignedBalance - consumed;
+
+      let apiAvailable = null;
       if (
         cur.billing.saldo_disponible !== undefined &&
         cur.billing.saldo_disponible !== null
       ) {
         const n3 = Number(cur.billing.saldo_disponible);
-        if (!Number.isNaN(n3)) {
-          available = n3;
-        } else {
-          available = assignedBalance - consumed;
-        }
+        if (!Number.isNaN(n3)) apiAvailable = n3;
+      }
+
+      if (computedAvailable < 0) {
+        available = computedAvailable;
+      } else if (apiAvailable !== null) {
+        available = apiAvailable;
       } else {
-        available = assignedBalance - consumed;
+        available = computedAvailable;
       }
     } else {
       // Buscar un mes con saldo definido (aunque sea 0)
@@ -1025,6 +1330,11 @@ export default function ExperiencesScreen() {
       }
     }
   }
+  const availableNumber = Number(available) || 0;
+  const availableIsNegative = availableNumber < 0;
+  const formattedAvailableForDisplay = availableIsNegative
+    ? formatMoney(-Math.abs(availableNumber), {currencySign: '$'})
+    : formatMoney(availableNumber, {currencySign: '$'});
 
   let utilization = 0;
   if (typeof assignedBalance === 'number' && assignedBalance > 0) {
@@ -1032,6 +1342,52 @@ export default function ExperiencesScreen() {
   } else {
     utilization = 0;
   }
+  const computeVisibleMonths = () => {
+    if (!Array.isArray(monthsData) || monthsData.length === 0)
+      return listDataFallback;
+    const currentMonthNumber = now.getMonth() + 1; // 1..12
+    const upto = monthsData.filter(m => Number(m.month) <= currentMonthNumber);
+    const currentObj =
+      upto.find(m => Number(m.month) === currentMonthNumber) || null;
+    const prev = upto
+      .filter(m => Number(m.month) !== currentMonthNumber)
+      .sort((a, b) => Number(b.month) - Number(a.month));
+    if (currentObj) {
+      return [currentObj, ...prev];
+    }
+    return upto.length ? upto : listDataFallback;
+  };
+  const listData =
+    monthsData && monthsData.length ? computeVisibleMonths() : listDataFallback;
+  const selectedPeriodo = selectedMonth?.periodo
+    ? String(selectedMonth.periodo)
+    : '';
+  const selectedAssignedBalance =
+    Number(
+      selectedMonth?.billing?.saldo_mensual ??
+        selectedMonth?.billing?.saldo_asignado ??
+        0,
+    ) || 0;
+  const selectedConsumedBalance =
+    Number(
+      selectedMonth?.billing?.monto_mensual_usado ?? selectedMonth?.amount ?? 0,
+    ) || 0;
+  const selectedAvailableBalanceRaw =
+    selectedMonth?.billing?.saldo_disponible !== undefined &&
+    selectedMonth?.billing?.saldo_disponible !== null
+      ? Number(selectedMonth.billing.saldo_disponible)
+      : selectedAssignedBalance - selectedConsumedBalance;
+
+  const selectedAvailableBalance = Number.isFinite(selectedAvailableBalanceRaw)
+    ? selectedAvailableBalanceRaw
+    : 0;
+  const selectedOverBalance = Math.max(
+    0,
+    selectedConsumedBalance - selectedAssignedBalance,
+  );
+  const showMonthlyBalanceSummary =
+    Boolean(selectedPeriodo) && selectedPeriodo < currentPeriodo;
+
   return (
     <SafeAreaView style={{flex: 1, backgroundColor: '#FBFBFD'}}>
       <StatusBar
@@ -1082,7 +1438,7 @@ export default function ExperiencesScreen() {
                 <Text style={styles.smallWhite}>Saldo asignado</Text>
                 <Text
                   style={[styles.bigWhiteAmount, {fontSize: bigAmountFont}]}>
-                  ${Number(assignedBalance).toFixed(2)}
+                  {formatMoney(assignedBalance, {currencySign: '$'})}
                 </Text>
               </View>
 
@@ -1096,15 +1452,24 @@ export default function ExperiencesScreen() {
                   <View>
                     <Text style={styles.whiteSmallLabel}>Consumido</Text>
                     <Text style={styles.whiteSmallValue}>
-                      ${Number(consumed).toFixed(2)}
+                      {formatMoney(consumed, {currencySign: '$'})}
                     </Text>
                   </View>
 
                   <View style={{alignItems: 'flex-end'}}>
                     <Text style={styles.whiteSmallLabel}>Disponible</Text>
-                    <Text style={[styles.whiteSmallValue, {fontWeight: '800'}]}>
-                      ${Number(available).toFixed(2)}
+                    {/* ---------- UPDATED DISPLAY: show negative and color red when available < 0 ---------- */}
+                    <Text
+                      style={[
+                        styles.whiteSmallValue,
+                        {
+                          fontWeight: '800',
+                          color: availableIsNegative ? '#FF3B30' : '#fff',
+                        },
+                      ]}>
+                      {formattedAvailableForDisplay}
                     </Text>
+                    {/* ------------------------------------------------------------------------------- */}
                   </View>
                 </View>
 
@@ -1214,13 +1579,16 @@ export default function ExperiencesScreen() {
               onPress={closeSheet}
               style={sheetStyles.closeBtnTouchable}
               hitSlop={{top: 18, left: 18, right: 18, bottom: 18}}
+              pressRetentionOffset={{top: 54, left: 54, right: 54, bottom: 54}}
               accessibilityRole="button"
               accessibilityLabel="Cerrar detalle">
               <Ionicons name="close" size={20} color="#111" />
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={sheetStyles.sheetContent}>
+          <ScrollView
+            ref={sheetScrollRef}
+            contentContainerStyle={sheetStyles.sheetContent}>
             <Text style={sheetStyles.sheetTitle} numberOfLines={2}>
               {selectedMonth?.title ?? 'Detalle de consumos'}
             </Text>
@@ -1233,9 +1601,58 @@ export default function ExperiencesScreen() {
                 </Text>
               </View>
               <Text style={sheetStyles.totalAmount}>
-                ${Number(selectedMonth?.amount ?? 0).toFixed(2)}
+                {formatMoney(selectedMonth?.amount ?? 0, {currencySign: '$'})}
               </Text>
             </View>
+            {showMonthlyBalanceSummary && (
+              <View
+                style={{
+                  marginTop: 12,
+                  backgroundColor: '#FBF6FF',
+                  borderRadius: 14,
+                  padding: 16,
+                  borderWidth: 1,
+                  borderColor: '#F0E6FF',
+                }}>
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    marginBottom: 8,
+                  }}>
+                  <Text style={{color: '#6B7280', fontWeight: '700'}}>
+                    Saldo asignado
+                  </Text>
+                  <Text style={{color: '#111827', fontWeight: '800'}}>
+                    {formatMoney(selectedAssignedBalance, {currencySign: '$'})}
+                  </Text>
+                </View>
+
+                {/*                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <Text style={{ color: '#6B7280', fontWeight: '700' }}>Disponible mensual</Text>
+                  <Text style={{ color: selectedAvailableBalance < 0 ? '#DC2626' : '#111827', fontWeight: '800' }}>
+                    {formatMoney(Math.max(0, selectedAvailableBalance), { currencySign: '$' })}
+                  </Text>
+                </View> */}
+
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                  }}>
+                  <Text style={{color: '#6B7280', fontWeight: '700'}}>
+                    Exceso del saldo mensual
+                  </Text>
+                  <Text
+                    style={{
+                      color: selectedOverBalance > 0 ? '#DC2626' : '#10B981',
+                      fontWeight: '800',
+                    }}>
+                    {formatMoney(selectedOverBalance, {currencySign: '$'})}
+                  </Text>
+                </View>
+              </View>
+            )}
 
             <Text style={sheetStyles.sectionHeading}>Detalle de consumos</Text>
 

@@ -1,3 +1,4 @@
+//Good
 import React, {useEffect, useState, useMemo} from 'react';
 import {
   SafeAreaView,
@@ -23,8 +24,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 const API_BASE_URL = 'https://api.tab-track.com';
 const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2MjE4NzAyOCwianRpIjoiMTdlYTVjYTAtZTE3MC00ZjIzLTllMTgtZmZiZWYyMzg4OTE0IiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NjIxODcwMjgsImV4cCI6MTc2NDc3OTAyOCwicm9sIjoiRWRpdG9yIn0.W_zoGW2YpqCyaxpE1c_hnRXdtw5ty0DDd8jqvDbi6G0';
-
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 const formatMoney = n =>
   Number.isFinite(n)
     ? n.toLocaleString('es-MX', {
@@ -713,8 +713,41 @@ export default function Dividir() {
       usesExternalTotal ? round2(Number(externalTotalConsumo || 0)) : itemsSum,
     [usesExternalTotal, externalTotalConsumo, itemsSum],
   );
-  const iva = useMemo(() => round2((total / 1.16) * 0.16), [total]);
-  const subtotal = useMemo(() => round2(total - iva), [total, iva]);
+  const lockedSum = useMemo(() => {
+    return round2(
+      (items || []).reduce(
+        (s, it) => s + (it.locked ? Number(it.price || 0) : 0),
+        0,
+      ),
+    );
+  }, [items]);
+
+  const unpaidSum = useMemo(() => {
+    return round2(
+      (items || []).reduce(
+        (s, it) => s + (!it.locked ? Number(it.price || 0) : 0),
+        0,
+      ),
+    );
+  }, [items]);
+
+  const displayTotal = useMemo(() => {
+    if (usesExternalTotal) {
+      const candidate =
+        Number(externalTotalConsumo || 0) - Number(lockedSum || 0);
+      return round2(Math.max(0, candidate));
+    }
+    return unpaidSum;
+  }, [usesExternalTotal, externalTotalConsumo, lockedSum, unpaidSum]);
+
+  const iva = useMemo(
+    () => round2((displayTotal / 1.16) * 0.16),
+    [displayTotal],
+  );
+  const subtotal = useMemo(
+    () => round2(displayTotal - iva),
+    [displayTotal, iva],
+  );
 
   const selectedItems = useMemo(
     () => (items || []).filter(i => i.checked && !i.locked),
@@ -773,6 +806,7 @@ export default function Dividir() {
       showStyledAlert(
         'Selecciona productos',
         'Debes seleccionar al menos un producto para pagar por consumo.',
+        'Aceptar',
       );
       return;
     }
@@ -910,7 +944,7 @@ export default function Dividir() {
   const handleShare = async () => {
     try {
       const fields = sharedHiddenFields();
-      const niceTotal = formatMoney(total);
+      const niceTotal = formatMoney(displayTotal);
       const shareParts = [];
       shareParts.push(
         `Cuenta compartida${fields.saleId ? ` (venta ${fields.saleId})` : ''}`,
@@ -1080,8 +1114,19 @@ export default function Dividir() {
               ]}>
               {/* Pregunta: ahora un poco más chica */}
               <Text style={[styles.divideTitle]}>
-                {'Seleccione sus productos'}
+                {'Selecciona\ntus productos'}
               </Text>
+
+              <View style={styles.stackButtons}>
+                {!hideEqualButtonFlag && (
+                  <TouchableOpacity
+                    style={styles.ghostButton}
+                    onPress={handlePartesIguales}
+                    hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+                    <Text style={styles.ghostButtonText}>Partes iguales</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
           </View>
         </LinearGradient>
@@ -1205,7 +1250,7 @@ export default function Dividir() {
                   styles.desgloseValue,
                   {fontSize: Math.round(clamp(rf(5.2), 18, 24))},
                 ]}>
-                {formatMoney(total)} MXN
+                {formatMoney(displayTotal)} MXN
               </Text>
             </View>
           </View>
@@ -1226,11 +1271,11 @@ export default function Dividir() {
               activeOpacity={0.9}
               style={styles.shareButtonTouchable}
               hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-              <Text style={styles.shareButtonText}>Pagar</Text>
+              <Text style={styles.shareButtonText}>Continuar</Text>
             </TouchableOpacity>
           </LinearGradient>
 
-          {/* Compartir cuenta (Share nativo) */}
+          {/*
           <TouchableOpacity
             style={[
               styles.shareButton,
@@ -1239,7 +1284,7 @@ export default function Dividir() {
             onPress={handleShare}
             hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
             <Text style={styles.shareButtonText}>Compartir cuenta</Text>
-          </TouchableOpacity>
+          </TouchableOpacity> */}
         </View>
 
         <View style={{height: Math.round(hp(4))}} />

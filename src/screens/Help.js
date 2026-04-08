@@ -12,6 +12,7 @@ import {
   Alert,
   Platform,
   useWindowDimensions,
+  PixelRatio,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -20,7 +21,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 const initialMethods = [
   {key: 'card1', label: 'Servicio de ayuda'},
   {key: 'card2', label: 'Estado de la cuenta'},
-  {key: 'paypal', label: 'Buzon de ayuda'},
+  {key: 'paypal', label: 'Buzón de ayuda'},
   {key: 'applepay', label: 'Reportar un problema'},
 ];
 
@@ -35,6 +36,7 @@ export default function Help({navigation}) {
   const wp = p => (width * Number(p)) / 100;
   const hp = p => (height * Number(p)) / 100;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const rf = p => Math.round(PixelRatio.roundToNearestPixel((p * width) / 375));
 
   const iconSize = clamp(Math.round(width * 0.05), 16, 28);
   const headerPaddingV = clamp(Math.round(hp(3)), 8, 36);
@@ -82,7 +84,7 @@ export default function Help({navigation}) {
   const WHATSAPP_FULL_URL =
     'https://api.whatsapp.com/send?phone=525647197764&text=%C2%A1Hola!%20Quiero%20m%C3%A1s%20informaci%C3%B3n%20de%20';
   const WHATSAPP_TEXT_FALLBACK = 'Hola, necesito ayuda.';
-  const SUPPORT_EMAIL = 'tabtracksupport@gmail.com';
+  const SUPPORT_EMAIL = 'contacto@tab-track.com';
   // ------------------------------------
 
   const openWhatsApp = async () => {
@@ -278,14 +280,14 @@ export default function Help({navigation}) {
         <View style={styles.sectionHeader}>
           <Ionicons
             name="help-outline"
-            size={Math.max(18, iconSize)}
+            size={Math.max(20, iconSize)}
             color={styles.sectionTitle.color}
           />
           <Text
             style={[
               styles.sectionTitle,
               {
-                fontSize: clamp(Math.round(width * 0.044), 14, 18),
+                fontSize: clamp(rf(30), 15, 21),
                 marginLeft: 10,
               },
             ]}>
@@ -318,7 +320,7 @@ export default function Help({navigation}) {
                   style={[
                     styles.methodText,
                     {
-                      fontSize: clamp(Math.round(width * 0.038), 12, 16),
+                      fontSize: clamp(rf(30), 14, 20), //Good Profile Font size with the right rf
                       marginLeft: 10,
                     },
                   ]}>

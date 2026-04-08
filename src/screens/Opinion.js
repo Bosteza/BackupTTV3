@@ -1,5 +1,6 @@
+//good
 import React, {useState, useEffect, useRef} from 'react';
-import {useNotifications} from './NotificationProvider';
+
 import {
   SafeAreaView,
   ScrollView,
@@ -23,7 +24,7 @@ import LinearGradient from 'react-native-linear-gradient';
 
 const API_BASE_URL = 'https://api.tab-track.com';
 const API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 export default function OpinionScreen({navigation, route}) {
   const {width, height} = useWindowDimensions();
@@ -50,10 +51,8 @@ export default function OpinionScreen({navigation, route}) {
     SLIDE_HEIGHT,
   });
 
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [alreadySent, setAlreadySent] = useState(false);
+  const [answeredEncuestas, setAnsweredEncuestas] = useState({});
 
-  const {notifications, unreadCount, markAllRead} = useNotifications();
   const [surveys, setSurveys] = useState([]);
   const [loadingSurveys, setLoadingSurveys] = useState(false);
   const [sending, setSending] = useState(false);
@@ -185,6 +184,7 @@ export default function OpinionScreen({navigation, route}) {
             // recorrer encuestas y pedir reportes
             const accumulatedRatings = {};
             const accumulatedTexts = {};
+            const answeredLocal = {}; // por encuesta
             for (const encuesta of arr) {
               const encuestaId =
                 encuesta?.id ?? encuesta?.encuesta_id ?? encuesta?.uuid ?? null;
@@ -241,7 +241,6 @@ export default function OpinionScreen({navigation, route}) {
                   const keys = Object.keys(repJson);
                   for (const k of keys) {
                     if (Array.isArray(repJson[k]) && repJson[k].length > 0) {
-                      setAlreadySent(true);
                       // si el array contiene objetos con 'pregunta_id' o 'respuestas', lo usamos
                       const sample = repJson[k][0];
                       if (
@@ -282,7 +281,7 @@ export default function OpinionScreen({navigation, route}) {
                   // no hay respuestas previas para esta encuesta
                   continue;
                 }
-
+                answeredLocal[encuestaId] = true;
                 // reps puede ser un array de objetos que representan respuestas individuales
                 // Cada item puede tener: pregunta_id, valor_int, valor_text, valor, respuesta, etc.
                 // Recorremos y mappeamos a ratings/texts
@@ -375,7 +374,8 @@ export default function OpinionScreen({navigation, route}) {
 
             // aplicar acumulados al estado (merge sin borrar entradas que el usuario ya haya modificado en pantalla)
             setRatingsMap(prev => ({...accumulatedRatings, ...prev})); // priorizamos prev (ya ingresado por usuario) if any
-            setTextsMap(prev => ({...accumulatedTexts, ...prev}));
+            setTextsMap(prev => ({...accumulatedTexts, ...prev})); // set answered per encuesta
+            setAnsweredEncuestas(prev => ({...prev, ...answeredLocal}));
           } // end if have userId & saleId & sucursalId
         } catch (err) {
           console.warn('OpinionScreen: error loading previous reportes', err);
@@ -403,7 +403,6 @@ export default function OpinionScreen({navigation, route}) {
   const handleSend = async () => {
     if (!surveys || surveys.length === 0) {
       showToast('No hay encuestas para enviar.');
-      setAlreadySent(true);
 
       return;
     }
@@ -433,6 +432,9 @@ export default function OpinionScreen({navigation, route}) {
         const encuestaId =
           encuesta?.id ?? encuesta?.encuesta_id ?? encuesta?.uuid ?? null;
         if (!encuestaId) continue;
+        if (answeredEncuestas[encuestaId]) {
+          continue;
+        }
 
         const respuestas = [];
         for (const p of encuesta.preguntas || []) {
@@ -525,64 +527,17 @@ export default function OpinionScreen({navigation, route}) {
       setSending(false);
     }
   };
+  // Computar si todas las encuestas cargadas ya están respondidas (para cambiar el texto del botón y deshabilitar envío)
+  const allSurveysAnswered =
+    surveys.length > 0 &&
+    surveys.every(enc => {
+      const eid = enc?.id ?? enc?.encuesta_id ?? enc?.uuid ?? null;
+      return eid ? Boolean(answeredEncuestas[eid]) : false;
+    });
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
-
-      {/* Modal de notificaciones */}
-      <Modal visible={showNotifications} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalBox, {width: modalWidth}]}>
-            <View style={styles.modalHeader}>
-              <Text
-                style={[styles.modalTitle, {fontSize: clamp(rf(3.8), 16, 20)}]}>
-                Notificaciones
-              </Text>
-              <TouchableOpacity
-                onPress={() => setShowNotifications(false)}
-                hitSlop={{top: 8, left: 8, right: 8, bottom: 8}}>
-                <Ionicons name="close" size={iconSize} color="#333" />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.modalListHeader}>
-              <Text style={styles.modalListHeaderText}>
-                Últimas notificaciones
-              </Text>
-            </View>
-
-            <ScrollView
-              style={[
-                styles.modalList,
-                {maxHeight: Math.round(Math.min(hp(60), 420))},
-              ]}>
-              {notifications && notifications.length > 0 ? (
-                notifications.map(n => (
-                  <NotificationRow key={n.id} n={n} styles={styles} />
-                ))
-              ) : (
-                <View style={styles.noNotifications}>
-                  <Text style={styles.noNotificationsText}>
-                    No hay notificaciones nuevas.
-                  </Text>
-                </View>
-              )}
-            </ScrollView>
-
-            <TouchableOpacity
-              style={[styles.markReadButton, {margin: basePadding}]}
-              onPress={markAllRead}>
-              <Text
-                style={[
-                  styles.markReadText,
-                  {fontSize: clamp(rf(3.6), 13, 16)},
-                ]}>
-                Marcar todo como leído
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -603,23 +558,7 @@ export default function OpinionScreen({navigation, route}) {
             source={require('../../assets/images/logo.png')}
             style={styles.logo}
           /> */}
-          <TouchableOpacity
-            onPress={() => setShowNotifications(true)}
-            style={styles.headerButton}
-            hitSlop={{top: 8, left: 8, right: 8, bottom: 8}}>
-            <Ionicons name="notifications-outline" size={30} color="#0046ff" />
-            {unreadCount > 0 && (
-              <View style={[styles.badge, {right: 6, top: 1}]}>
-                <Text
-                  style={[
-                    styles.badgeText,
-                    {fontSize: clamp(rf(2.6), 15, 20)},
-                  ]}>
-                  {unreadCount}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
+          {}
         </View>
       </View>
 
@@ -696,119 +635,127 @@ export default function OpinionScreen({navigation, route}) {
                 </View>
               ) : null}
 
-              {surveys.map((encuesta, si) => (
-                <View key={encuesta.id ?? si} style={{marginBottom: 20}}>
-                  <Text
-                    style={[
-                      styles.surveyTitle,
-                      {paddingLeft: styles.basePadding},
-                    ]}>
-                    {encuesta.nombre ??
-                      encuesta.titulo ??
-                      encuesta.descripcion ??
-                      `Encuesta ${si + 1}`}
-                  </Text>
-
-                  {(encuesta.preguntas || []).map((p, i) => {
-                    const pid = p.id ?? p.pregunta_id ?? `p_${i}`;
-                    const tipo = (p.tipo ?? '').toUpperCase();
-                    return (
-                      <View
-                        key={pid}
-                        style={[
-                          styles.questionBlock,
-                          {paddingLeft: styles.basePadding},
-                        ]}>
-                        <Text
-                          style={[
-                            styles.questionText,
-                            {fontSize: styles.questionFontSize},
-                          ]}>{`${i + 1}. ${
-                          p.texto ?? p.text ?? 'Pregunta'
-                        }`}</Text>
-
-                        {tipo === 'ESTRELLAS' ? (
-                          <View style={styles.starsRow}>
-                            {[1, 2, 3, 4, 5].map(s => {
-                              const filled = (ratingsMap[pid] ?? 0) >= s;
-                              return (
-                                <TouchableOpacity
-                                  key={s}
-                                  onPress={() => {
-                                    if (!alreadySent)
-                                      setStarForQuestion(pid, s);
-                                  }}
-                                  disabled={alreadySent}
-                                  accessibilityRole="button">
-                                  <Ionicons
-                                    name={filled ? 'star' : 'star-outline'}
-                                    size={styles.starSize}
-                                    color={filled ? '#FFD700' : '#CCC'}
-                                    style={{marginRight: 6}}
-                                  />
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </View>
-                        ) : (
-                          <TextInput
-                            style={styles.opinionInput}
-                            multiline
-                            numberOfLines={4}
-                            placeholder="Escribe tu respuesta..."
-                            placeholderTextColor="#999"
-                            value={textsMap[pid] ?? ''}
-                            editable={!alreadySent}
-                            selectTextOnFocus={!alreadySent}
-                            onChangeText={t => {
-                              if (!alreadySent) setTextForQuestion(pid, t);
-                            }}
-                          />
-                        )}
-                      </View>
-                    );
-                  })}
-                </View>
-              ))}
-
-              <View style={{marginTop: 0}} />
-              {alreadySent ? (
-                <View style={styles.sentButtonWrapper}>
-                  <View style={styles.sentButtonInner}>
-                    <LinearGradient
-                      colors={['#9F4CFF', '#6A43FF', '#2C7DFF']}
-                      start={{x: 0, y: 0}}
-                      end={{x: 1, y: 0}}
-                      style={styles.sentGradientBg}
-                    />
+              {surveys.map((encuesta, si) => {
+                const encuestaId =
+                  encuesta?.id ??
+                  encuesta?.encuesta_id ??
+                  encuesta?.uuid ??
+                  `enc_${si}`;
+                const encuestaAnswered = Boolean(answeredEncuestas[encuestaId]);
+                return (
+                  <View key={encuestaId ?? si} style={{marginBottom: 20}}>
                     <Text
-                      allowFontScaling={false}
                       style={[
-                        styles.sentButtonText,
-                        {
-                          fontSize: 17,
-                          lineHeight: Math.round(30 * 1.2),
-                        },
+                        styles.surveyTitle,
+                        {paddingLeft: styles.basePadding},
                       ]}>
-                      Tu respuesta se ha enviado, ¡muchas gracias!
+                      {encuesta.nombre ??
+                        encuesta.titulo ??
+                        encuesta.descripcion ??
+                        `Encuesta ${si + 1}`}
                     </Text>
+
+                    {(encuesta.preguntas || []).map((p, i) => {
+                      const pid = p.id ?? p.pregunta_id ?? `p_${i}`;
+                      const tipo = (p.tipo ?? '').toUpperCase();
+                      // si esta encuesta ya está respondida, bloqueamos edición para todas sus preguntas
+                      if (tipo === 'ESTRELLAS') {
+                        return (
+                          <View
+                            key={pid}
+                            style={[
+                              styles.questionBlock,
+                              {paddingLeft: styles.basePadding},
+                            ]}>
+                            <Text
+                              style={[
+                                styles.questionText,
+                                {fontSize: styles.questionFontSize},
+                              ]}>{`${i + 1}. ${
+                              p.texto ?? p.text ?? 'Pregunta'
+                            }`}</Text>
+                            <View style={styles.starsRow}>
+                              {[1, 2, 3, 4, 5].map(s => {
+                                const filled = (ratingsMap[pid] ?? 0) >= s;
+                                // Si encuestaAnswered true, no permitimos onPress
+                                return (
+                                  <TouchableOpacity
+                                    key={s}
+                                    onPress={
+                                      encuestaAnswered
+                                        ? undefined
+                                        : () => setStarForQuestion(pid, s)
+                                    }
+                                    accessibilityRole="button">
+                                    <Ionicons
+                                      name={filled ? 'star' : 'star-outline'}
+                                      size={styles.starSize}
+                                      color={filled ? '#FFD700' : '#CCC'}
+                                      style={{marginRight: 6}}
+                                    />
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </View>
+                          </View>
+                        );
+                      } else {
+                        return (
+                          <View
+                            key={pid}
+                            style={[
+                              styles.questionBlock,
+                              {paddingLeft: styles.basePadding},
+                            ]}>
+                            <Text
+                              style={[
+                                styles.questionText,
+                                {fontSize: styles.questionFontSize},
+                              ]}>{`${i + 1}. ${
+                              p.texto ?? p.text ?? 'Pregunta'
+                            }`}</Text>
+                            <TextInput
+                              style={styles.opinionInput}
+                              multiline
+                              numberOfLines={4}
+                              placeholder="Escribe tu respuesta..."
+                              placeholderTextColor="#999"
+                              value={textsMap[pid] ?? ''}
+                              onChangeText={t => {
+                                if (!encuestaAnswered)
+                                  setTextForQuestion(pid, t);
+                              }}
+                              editable={!encuestaAnswered}
+                            />
+                          </View>
+                        );
+                      }
+                    })}
                   </View>
-                </View>
-              ) : (
-                <View style={styles.buttonRow}>
-                  <TouchableOpacity
-                    style={[styles.btnPrimary, {opacity: sending ? 0.7 : 1}]}
-                    onPress={handleSend}
-                    disabled={sending}
-                    activeOpacity={0.85}>
-                    {sending ? (
-                      <ActivityIndicator color="#fff" />
-                    ) : (
-                      <Text style={styles.btnText}>Enviar</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              )}
+                );
+              })}
+
+              <View style={{marginTop: 8}} />
+
+              <View style={styles.buttonRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.btnPrimary,
+                    {opacity: sending || allSurveysAnswered ? 0.7 : 1},
+                  ]}
+                  onPress={handleSend}
+                  disabled={sending || allSurveysAnswered}>
+                  {sending ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.btnText}>
+                      {allSurveysAnswered
+                        ? 'Su respuesta se ha enviado, ¡muchas gracias!'
+                        : 'Enviar'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             </>
           )}
         </View>
@@ -821,40 +768,6 @@ export default function OpinionScreen({navigation, route}) {
         </View>
       )}
     </SafeAreaView>
-  );
-}
-
-function NotificationRow({n, styles}) {
-  const dateLabel = n.date
-    ? new Date(n.date).toLocaleString('es-MX', {
-        dateStyle: 'short',
-        timeStyle: 'short',
-      })
-    : '';
-
-  return (
-    <View
-      style={[
-        styles.notificationItemLarge,
-        n.read ? styles.readCard : styles.unreadCard,
-      ]}>
-      <View style={styles.notLeft}>
-        <Text style={styles.notBranch} numberOfLines={1}>
-          {n.branch || `Venta ${n.saleId ?? ''}`}
-        </Text>
-        <Text style={styles.notDate}>{dateLabel}</Text>
-      </View>
-
-      <View style={styles.notRight}>
-        <Text style={styles.notAmount}>
-          {Number(n.amount || 0).toLocaleString('es-MX', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })}
-        </Text>
-        <Text style={styles.notCurrency}>MXN</Text>
-      </View>
-    </View>
   );
 }
 

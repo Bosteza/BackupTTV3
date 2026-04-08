@@ -14,6 +14,7 @@ import {
 import LinearGradient from 'react-native-linear-gradient';
 import {useNavigation} from '@react-navigation/native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function WelcomeScreen() {
   const navigation = useNavigation();
@@ -28,6 +29,20 @@ export default function WelcomeScreen() {
   const topInset = Math.max(insets?.top ?? 0, StatusBar.currentHeight ?? 0);
   const bottomInset = insets?.bottom ?? 0;
   // -------------------------------------------------------------------------------
+
+  const handleGuest = async () => {
+    try {
+      await AsyncStorage.multiSet([
+        ['session_active', '0'],
+        ['session_guest', '1'],
+        ['session_guest_at', String(Date.now())],
+      ]);
+
+      navigation.reset({index: 0, routes: [{name: 'Home'}]});
+    } catch (e) {
+      // optional: show a toast/alert
+    }
+  };
 
   const scaled = {
     paddingVertical: clamp(rf(60), 12, 120),
@@ -230,6 +245,31 @@ export default function WelcomeScreen() {
               allowFontScaling={false}
               style={[dynamicStyles.buttonText, dynamicStyles.buttonTextWhite]}>
               Crear Cuenta
+            </Text>
+          </View>
+        </TouchableOpacity>
+        <View style={dynamicStyles.buttonGap} />
+
+        <TouchableOpacity
+          style={[
+            dynamicStyles.secondaryButtonWrapper,
+            {
+              borderWidth: 1,
+              borderColor: '#0046ff',
+              backgroundColor: '#fff',
+            },
+          ]}
+          onPress={handleGuest}
+          activeOpacity={0.85}
+          hitSlop={{top: 6, bottom: 6, left: 8, right: 8}}>
+          <View style={[dynamicStyles.buttonInner, {backgroundColor: '#fff'}]}>
+            <Text
+              allowFontScaling={false}
+              style={[
+                dynamicStyles.buttonText,
+                {color: '#0046ff', fontFamily: 'Montserrat-Bold'},
+              ]}>
+              Continuar como invitado
             </Text>
           </View>
         </TouchableOpacity>

@@ -1,35 +1,44 @@
+//Working
 import React from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, useWindowDimensions, PixelRatio, Platform } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Image,
+  TouchableOpacity,
+  useWindowDimensions,
+  PixelRatio,
+  Platform,
+} from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import googleIcon from '../../assets/images/google.jpg';
 import facebookIcon from '../../assets/images/facebook.jpg';
 import appleIcon from '../../assets/images/apple.jpg';
-import { useNavigation } from '@react-navigation/native';
+import {useNavigation} from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 export default function CreateAccount() {
   const navigation = useNavigation();
-  const { width, height } = useWindowDimensions();
+  const {width, height} = useWindowDimensions();
 
   // helpers responsivos
-  const wp = (p) => (Number(p) / 100) * width;
-  const hp = (p) => (Number(p) / 100) * height;
-  const rf = (p) => {
+  const wp = p => (Number(p) / 100) * width;
+  const hp = p => (Number(p) / 100) * height;
+  const rf = p => {
     const size = (Number(p) / 100) * width;
     return Math.round(PixelRatio.roundToNearestPixel(size));
   };
   const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
-  const styles = makeStyles({ wp, hp, rf, clamp, width, height, Platform });
+  const styles = makeStyles({wp, hp, rf, clamp, width, height, Platform});
 
   return (
     <LinearGradient
       colors={['rgb(255, 255, 255)', 'rgb(255, 255, 255)']}
-      locations={[0.35, .85]}
-      start={{ x: 0, y: 1 }}
-      end={{ x: 1, y: 0 }}
-      style={styles.container}
-    >
+      locations={[0.35, 0.85]}
+      start={{x: 0, y: 1}}
+      end={{x: 1, y: 0}}
+      style={styles.container}>
       <Image
         source={require('../../assets/images/logo.png')}
         style={styles.logo}
@@ -49,7 +58,8 @@ export default function CreateAccount() {
 
       <View style={styles.buttonContainer}>
         {/* Mantengo sólo el botón que usas en producción */}
-        <TouchableOpacity style={[styles.button, styles.googleButton]}
+        <TouchableOpacity
+          style={[styles.button, styles.googleButton]}
           onPress={() => navigation.navigate('Cuenta')}>
           <Text style={styles.buttonText}>Continuar con tu correo</Text>
         </TouchableOpacity>
@@ -58,7 +68,7 @@ export default function CreateAccount() {
   );
 }
 
-function makeStyles({ wp, hp, rf, clamp, width, height, Platform }) {
+function makeStyles({wp, hp, rf, clamp, width, height, Platform}) {
   return StyleSheet.create({
     container: {
       flex: 1,
@@ -67,10 +77,13 @@ function makeStyles({ wp, hp, rf, clamp, width, height, Platform }) {
       paddingVertical: Math.round(hp(4)),
       paddingHorizontal: Math.round(wp(6)),
       backgroundColor: 'transparent',
-      paddingTop: Platform.OS === 'android' ? (Math.round(hp(2)) + (Platform.OS === 'android' ? 0 : 0)) : Math.round(hp(2)),
+      paddingTop:
+        Platform.OS === 'android'
+          ? Math.round(hp(2)) + (Platform.OS === 'android' ? 0 : 0)
+          : Math.round(hp(2)),
     },
     logo: {
-      width: Math.round(clamp(wp(60), 120, 320)), 
+      width: Math.round(clamp(wp(60), 120, 320)),
       height: Math.round(clamp(rf(12), 36, 140)),
       resizeMode: 'contain',
       marginTop: Math.round(hp(2)),
@@ -79,9 +92,9 @@ function makeStyles({ wp, hp, rf, clamp, width, height, Platform }) {
       alignItems: 'flex-start',
       width: '100%',
       paddingHorizontal: Math.round(wp(6)),
-     },
+    },
     title: {
-      fontSize: Math.round(clamp(rf(9), 22, 44)), 
+      fontSize: Math.round(clamp(rf(9), 22, 44)),
       color: '#000',
       textAlign: 'left',
       marginTop: 0,
@@ -93,7 +106,7 @@ function makeStyles({ wp, hp, rf, clamp, width, height, Platform }) {
       fontSize: Math.round(clamp(rf(9), 22, 44)),
       color: '#000',
       textAlign: 'left',
-      marginTop: -Math.round(hp(1.2)), 
+      marginTop: -Math.round(hp(1.2)),
       fontFamily: 'Montserrat-Bold',
       marginRight: 0,
       lineHeight: Math.round(clamp(rf(10.5), 26, 52)),
@@ -125,8 +138,7 @@ function makeStyles({ wp, hp, rf, clamp, width, height, Platform }) {
       borderWidth: 1,
       borderColor: '#000',
     },
-    googleButton: {
-     },
+    googleButton: {},
     registerButton: {
       backgroundColor: '#ffffff',
     },

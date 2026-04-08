@@ -1,3 +1,4 @@
+//Cambio flujo
 import React, {useMemo, useState, useEffect} from 'react';
 import {
   SafeAreaView,
@@ -134,6 +135,11 @@ export default function Propina() {
     }
     return selectedPercent || 0;
   }, [selectedPercent, otherPercent, customActive]);
+  // Nos aseguramos que el porcentaje se quede con 2 decimales (Number)
+  const percentRounded = useMemo(() => {
+    const p = Number(percent || 0);
+    return Number(Number(p).toFixed(2));
+  }, [percent]);
 
   const peopleCount = typeof people === 'number' && people > 0 ? people : 1;
 
@@ -160,14 +166,14 @@ export default function Propina() {
     returnScreen === 'Consumo' || params.from === 'Consumo';
 
   const groupTipAmount = useMemo(() => {
-    const t = +(groupTotal * (Number(percent || 0) / 100));
+    const t = +(groupTotal * (Number(percentRounded || 0) / 100));
     return Number(t.toFixed(2));
-  }, [groupTotal, percent]);
+  }, [groupTotal, percentRounded]);
 
   const perPersonTipAmount = useMemo(() => {
-    const t = +(perPersonTotal * (Number(percent || 0) / 100));
+    const t = +(perPersonTotal * (Number(percentRounded || 0) / 100));
     return Number(t.toFixed(2));
-  }, [perPersonTotal, percent]);
+  }, [perPersonTotal, percentRounded]);
 
   const groupTotalWithTip = useMemo(
     () => Number((groupTotal + groupTipAmount).toFixed(2)),
@@ -232,7 +238,7 @@ export default function Propina() {
 
   const applyAndReturn = () => {
     const payloadTipApplied = {
-      percent: Number(percent || 0),
+      percent: percentRounded,
       tipAmount: round2(groupTipAmount),
       totalWithTip: round2(groupTotalWithTip),
       subtotal: round2(groupSubtotal),
@@ -244,7 +250,7 @@ export default function Propina() {
 
     if (comingFromEqualSplit && peopleCount > 1) {
       const payloadPerPerson = {
-        percent: Number(percent || 0),
+        percent: percentRounded,
         tipAmount: perPersonTipAmount,
         totalWithTip: perPersonTotalWithTip,
         subtotal: perPersonSubtotal,
@@ -258,7 +264,7 @@ export default function Propina() {
         groupTipAmount: groupTipAmount,
         groupTotalWithTip: groupTotalWithTip,
         groupPeople: peopleCount,
-        tipPercent: percent,
+        tipPercent: percentRounded,
         ...extraMeta,
         restaurantImage,
       };
@@ -278,7 +284,7 @@ export default function Propina() {
           perPersonTotalWithTip,
           tipApplied: payloadPerPerson,
           groupPeople: peopleCount,
-          tipPercent: percent,
+          tipPercent: percentRounded,
           token,
           items: normalizedItems,
           restaurantImage,
@@ -288,7 +294,7 @@ export default function Propina() {
     }
 
     const payloadToReturn = attachMetaDup({
-      percent: Number(percent || 0),
+      percent: percentRounded,
       tipAmount: round2(groupTipAmount),
       totalWithTip: round2(groupTotalWithTip),
       subtotal: round2(groupSubtotal),
@@ -302,7 +308,7 @@ export default function Propina() {
       perPersonTipAmount,
       perPersonTotalWithTip,
       groupPeople: peopleCount,
-      tipPercent: percent,
+      tipPercent: percentRounded,
       restaurantImage,
     });
 
@@ -316,6 +322,8 @@ export default function Propina() {
 
     navigation.navigate('ResumenPago', {tipApplied: payloadTipApplied});
   };
+  const isFromOneExhibicion =
+    returnScreen === 'OneExhibicion' || params.from === 'OneExhibicion';
 
   const payNow = () => {
     if (comingFromEqualSplit && peopleCount > 1) {
@@ -325,29 +333,101 @@ export default function Propina() {
         subtotal: perPersonSubtotal,
         iva: perPersonIva,
         tipAmount: perPersonTipAmount,
-        total: perPersonTotal, // <-- FIX: base total (no tip)
-        totalWithTip: perPersonTotalWithTip, // <-- keep: total including tip
+        total: perPersonTotal,
+        totalWithTip: perPersonTotalWithTip,
         people: 1,
         groupPeople: peopleCount,
-        tipPercent: percent,
+        tipPercent: percentRounded,
         restaurantImage,
       });
+      console.log(
+        'Propina -> payNow (EqualSplit) payload:',
+        JSON.stringify(payPayload, null, 2),
+      );
       navigation.navigate('Payment', payPayload);
       return;
     }
 
+    if (isFromOneExhibicion) {
+      const itemsPayload = (normalizedItems || []).map(it => ({
+        id: it.id ?? `item-${Math.random().toString(36).slice(2, 9)}`,
+        name: it.name ?? 'Item',
+        qty: 1,
+        unitPrice: Number(it.unitPrice ?? it.price ?? 0),
+        price: Number(it.lineTotal ?? it.price ?? 0),
+        lineTotal: Number(it.lineTotal ?? it.price ?? 0),
+        paid: !!it.paid,
+        paidPartial: !!it.paidPartial,
+        paidAmount: Number(it.paidAmount ?? 0),
+        canceled: !!it.canceled,
+        raw: it.raw ?? it,
+      }));
+
+      const originalItems = (normalizedItems || []).map(it => ({
+        id: it.id,
+        name: it.name,
+        qty: Number(it.qty || 1),
+        unitPrice: Number(it.unitPrice || it.price || 0),
+        lineTotal: Number(it.lineTotal || 0),
+        paid: !!it.paid,
+        paidPartial: !!it.paidPartial,
+        paidAmount: Number(it.paidAmount ?? 0),
+        canceled: !!it.canceled,
+        raw: it.raw ?? it,
+      }));
+
+      const payPayload = attachMetaDup({
+        token,
+        items: itemsPayload,
+        originalItems,
+        subtotal: round2(groupSubtotal),
+        iva: round2(groupIva),
+        tipAmount: round2(groupTipAmount),
+        total: round2(groupTotal),
+        totalWithTip: round2(groupTotalWithTip),
+        displayTotal: round2(groupTotalWithTip),
+        people,
+        tipPercent: percentRounded,
+        restaurantImage,
+      });
+
+      console.log(
+        'Propina -> payNow (FROM OneExhibicion) payload (CON items):',
+        JSON.stringify(payPayload, null, 2),
+      );
+      navigation.navigate('Payment', payPayload);
+      return;
+    }
+
+    const defaultItemsPayload = (normalizedItems || []).map(it => ({
+      id: it.id ?? `item-${Math.random().toString(36).slice(2, 9)}`,
+      name: it.name ?? 'Item',
+      qty: Number(it.qty ?? 1),
+      unitPrice: Number(it.unitPrice ?? it.price ?? 0),
+      price: Number(it.lineTotal ?? it.price ?? 0),
+      lineTotal: Number(it.lineTotal ?? it.price ?? 0),
+      paid: !!it.paid,
+      paidPartial: !!it.paidPartial,
+      paidAmount: Number(it.paidAmount ?? 0),
+      canceled: !!it.canceled,
+      raw: it.raw ?? it,
+    }));
     const payload = attachMetaDup({
       token,
-      items: normalizedItems,
+      items: defaultItemsPayload,
       subtotal: groupSubtotal,
       iva: groupIva,
       tipAmount: round2(groupTipAmount),
       totalWithTip: round2(groupTotalWithTip),
       total: groupTotal,
       people,
-      tipPercent: percent,
+      tipPercent: percentRounded,
       restaurantImage,
     });
+    console.log(
+      'Propina -> payNow (default) payload:',
+      JSON.stringify(payload, null, 2),
+    );
     navigation.navigate('Payment', payload);
   };
 
@@ -486,13 +566,13 @@ export default function Propina() {
                 styles.rightCol,
                 {alignItems: 'flex-end', maxWidth: Math.round(width * 0.46)},
               ]}>
-              <Text
+              {/*  <Text
                 style={[
                   styles.totalLabel,
                   {fontSize: clampLocal(rf(13), 12, 18)},
                 ]}>
                 {comingFromEqualSplit && peopleCount > 1 ? 'Total' : 'Total'}
-              </Text>
+              </Text> */}
               <View style={styles.totalRow}>
                 <Text
                   style={[styles.totalNumber, {fontSize: totalFontSize}]}
@@ -597,7 +677,7 @@ export default function Propina() {
                     {p}%
                   </Text>
                   <Text style={[styles.optionRight, {fontSize: optionFont}]}>
-                    {formatMoney((rightValueBase * p) / 100)} MXN
+                    {formatMoney(round2((rightValueBase * p) / 100))} MXN
                   </Text>
                 </TouchableOpacity>
               );
@@ -655,8 +735,11 @@ export default function Propina() {
                   keyboardType="numeric"
                   value={otherPercent}
                   onChangeText={t => {
-                    const cleaned = t.replace(/[^0-9,.\-]/g, '');
-                    setOtherPercent(cleaned);
+                    let cleaned = t.replace(/[^0-9,.\-]/g, '');
+                    cleaned = cleaned.replace(/,/g, '.');
+                    const m = cleaned.match(/^(\d+)(\.(\d{0,2}))?/);
+                    const v = m ? (m[2] ? `${m[1]}${m[2]}` : m[1]) : '';
+                    setOtherPercent(v);
                     setCustomActive(true);
                     setSelectedPercent(null);
                     setHasAppliedBefore(true);

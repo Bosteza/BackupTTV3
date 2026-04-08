@@ -1,3 +1,4 @@
+//working 9 mar
 import React, {useState, useEffect, useRef} from 'react';
 import {
   View,
@@ -22,7 +23,7 @@ import {Keyboard} from 'react-native';
 
 const API_BASE = 'https://api.tab-track.com/api/mobileapp';
 const API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 const PRIMARY = '#FEFFFFFF';
 const BLUE = '#0046ff';
 
@@ -138,12 +139,15 @@ export default function ChangePassword() {
       setNewPassword('');
     });
 
+    // Obtener el email desde AsyncStorage al montar el componente
     const getEmail = async () => {
       try {
-        // Keep your existing key; note your Login.js stores 'user_email'
-        // If you want it aligned, change this to AsyncStorage.getItem('user_email')
         const storedEmail = await AsyncStorage.getItem('user_mail');
-        if (storedEmail) setEmail(storedEmail);
+        if (storedEmail) {
+          setEmail(storedEmail);
+        } else {
+          console.warn('No se encontró el email en AsyncStorage');
+        }
       } catch (error) {
         console.error('Error al obtener el email desde AsyncStorage:', error);
       }

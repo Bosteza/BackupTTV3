@@ -1,9 +1,11 @@
-// Home.js
-import React from 'react';
+// Home.js (recommended: stable routes + conditional render via <Stack.Screen>{(props)=>...}</Stack.Screen>)
+import React, {useCallback, useState} from 'react';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
+import {useFocusEffect} from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import {View} from 'react-native';
+import {View, Text} from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Tabs principales
 import QRScreen from './QRScreen';
@@ -11,6 +13,9 @@ import ProfileScreen from './ProfileScreen';
 import GPSScreen from './GPSScreen';
 import Feed from './Feed';
 import ExperiencesScreen from './ExperiencesScreen';
+
+// Guest gate
+import GuestGate from './GuestGate';
 
 // Extras
 import RestaurantDetailScreen from './RestaurantDetailScreen';
@@ -40,15 +45,29 @@ import PaymentScreen from './PaymentScreen';
 import OpenPay from './OpenPay';
 import Stripe from './Stripe';
 import ConfirmacionPago from './ConfirmacionPago';
+import SaleDetail from './PagoDetail';
+import ErrorPago from './ErrorPago';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-/* Stacks por cada tab para mantener la barra siempre */
-function QRStackScreen() {
+// ------- Stacks por cada tab (reciben isGuest como prop) -------
+
+function QRStackScreen({isGuest}) {
   return (
     <Stack.Navigator screenOptions={{headerShown: false}}>
-      <Stack.Screen name="QRMain" component={QRScreen} />
+      <Stack.Screen name="QRMain">
+        {props =>
+          isGuest ? (
+            <GuestGate subtitle="QR está disponible al iniciar sesión.">
+              <QRScreen {...props} />
+            </GuestGate>
+          ) : (
+            <QRScreen {...props} />
+          )
+        }
+      </Stack.Screen>
+
       <Stack.Screen name="Escanear" component={Escanear} />
       <Stack.Screen name="Consumo" component={Consumo} />
       <Stack.Screen name="Dividir" component={Dividir} />
@@ -60,6 +79,7 @@ function QRStackScreen() {
       <Stack.Screen name="Openpay" component={OpenPay} />
       <Stack.Screen name="Stripe" component={Stripe} />
       <Stack.Screen name="ConfirmacionPago" component={ConfirmacionPago} />
+      <Stack.Screen name="ErrorPago" component={ErrorPago} />
     </Stack.Navigator>
   );
 }
@@ -90,23 +110,46 @@ function GPSStackScreen() {
   );
 }
 
-function ExperiencesStackScreen() {
+function ExperiencesStackScreen({isGuest}) {
   return (
     <Stack.Navigator screenOptions={{headerShown: false}}>
-      <Stack.Screen name="ExperiencesMain" component={ExperiencesScreen} />
+      <Stack.Screen name="ExperiencesMain">
+        {props =>
+          isGuest ? (
+            <GuestGate subtitle="Experiencias está disponible al iniciar sesión.">
+              <ExperiencesScreen {...props} />
+            </GuestGate>
+          ) : (
+            <ExperiencesScreen {...props} />
+          )
+        }
+      </Stack.Screen>
+
       <Stack.Screen name="ExperiencesDetails" component={ExperiencesDetails} />
       <Stack.Screen name="Rating" component={RatingSuccessScreen} />
       <Stack.Screen name="Calificar" component={Calificar} />
       <Stack.Screen name="Opinion" component={OpinionScreen} />
       <Stack.Screen name="OpinionSucces" component={OpinionSuccessScreen} />
+      <Stack.Screen name="SaleDetail" component={SaleDetail} />
     </Stack.Navigator>
   );
 }
 
-function ProfileStackScreen() {
+function ProfileStackScreen({isGuest}) {
   return (
     <Stack.Navigator screenOptions={{headerShown: false}}>
-      <Stack.Screen name="ProfileMain" component={ProfileScreen} />
+      <Stack.Screen name="ProfileMain">
+        {props =>
+          isGuest ? (
+            <GuestGate subtitle="Perfil está disponible al iniciar sesión.">
+              <ProfileScreen {...props} />
+            </GuestGate>
+          ) : (
+            <ProfileScreen {...props} />
+          )
+        }
+      </Stack.Screen>
+
       <Stack.Screen name="Payments" component={PaymentMethods} />
       <Stack.Screen name="InfoPersonal" component={InfoPersonal} />
       <Stack.Screen name="Facturacion" component={Facturacion} />
@@ -118,74 +161,133 @@ function ProfileStackScreen() {
       <Stack.Screen name="Dividir" component={Dividir} />
       <Stack.Screen name="Favorites" component={FavoritesScreen} />
       <Stack.Screen name="Restaurant" component={RestaurantDetailScreen} />
+      <Stack.Screen name="SaleDetail" component={SaleDetail} />
+      <Stack.Screen name="ExperiencesDetails" component={ExperiencesDetails} />
     </Stack.Navigator>
   );
 }
 
+// ------- Home (tabs) -------
+
 export default function Home() {
+  const [isGuest, setIsGuest] = useState(false);
+
+  // Refresh guest state whenever Home comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      let mounted = true;
+
+      (async () => {
+        try {
+          const sessionActive = await AsyncStorage.getItem('session_active');
+          const sessionGuest = await AsyncStorage.getItem('session_guest');
+
+          // guest = not logged in AND guest flag is on
+          const guest = sessionActive !== '1' && sessionGuest === '1';
+          if (mounted) setIsGuest(guest);
+        } catch {
+          if (mounted) setIsGuest(false);
+        }
+      })();
+
+      return () => {
+        mounted = false;
+      };
+    }, []),
+  );
+
   return (
     <Tab.Navigator
       initialRouteName="QR"
       lazy={true}
-      screenOptions={({route}) => ({
-        headerShown: false,
+      screenOptions={({route}) => {
+        // Optional: dim + “locked” label for these tabs in guest
+        const locked =
+          isGuest &&
+          (route.name === 'Experiences' ||
+            route.name === 'Perfil' ||
+            route.name === 'QR'); // keep/remove QR depending on your rules
 
-        tabBarIcon: ({color}) => {
-          let iconName;
-          switch (route.name) {
-            case 'GPS':
-              iconName = 'location-outline';
-              break;
-            case 'Feed':
-              iconName = 'restaurant-outline';
-              break;
-            case 'QR':
-              iconName = 'scan-circle-outline';
-              break;
-            case 'Experiences':
-              iconName = 'sparkles-outline';
-              break;
-            case 'Perfil':
-              iconName = 'person-circle-outline';
-              break;
-          }
-          return (
-            <View
-              style={{
-                width: 100, // fixed box
-                alignItems: 'center', // center icon horizontally
-                justifyContent: 'center', // center vertically
-                height: 100,
-              }}>
-              <Ionicons
-                name={iconName}
-                size={35}
-                color={color}
-                style={{marginRight: 0}}
-              />
-            </View>
-          );
-        },
+        return {
+          headerShown: false,
 
-        tabBarActiveTintColor: '#007aff',
-        tabBarInactiveTintColor: 'gray',
+          tabBarIcon: ({color}) => {
+            let iconName;
+            switch (route.name) {
+              case 'GPS':
+                iconName = 'location-outline';
+                break;
+              case 'Feed':
+                iconName = 'restaurant-outline';
+                break;
+              case 'QR':
+                iconName = 'scan-circle-outline';
+                break;
+              case 'Experiences':
+                iconName = 'sparkles-outline';
+                break;
+              case 'Perfil':
+                iconName = 'person-circle-outline';
+                break;
+              default:
+                iconName = 'ellipse-outline';
+            }
 
-        tabBarStyle: {
-          height: 100, // ⬅️ bigger whole block
-          paddingTop: 10,
-          marginBottom: 1,
-        },
+            //hace grises los inactivos
+            const iconColor = locked ? '#b5b5b5' : color;
 
-        tabBarLabelStyle: {
-          fontSize: 12, // ⬅️ bigger label
-          paddingTop: 10,
-        },
-      })}>
+            return (
+              <View
+                style={{
+                  width: 100,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: 100,
+                }}>
+                <Ionicons name={iconName} size={35} color={iconColor} />
+              </View>
+            );
+          },
+
+          tabBarActiveTintColor: '#007aff',
+          tabBarInactiveTintColor: 'gray',
+
+          tabBarStyle: {
+            height: 100,
+            paddingTop: 10,
+            marginBottom: 1,
+          },
+
+          tabBarLabelStyle: {
+            fontSize: 12,
+            paddingTop: 10,
+          },
+        };
+      }}>
       <Tab.Screen name="GPS" component={GPSStackScreen} />
       <Tab.Screen name="Feed" component={FeedStackScreen} />
-      <Tab.Screen name="QR" component={QRStackScreen} />
-      <Tab.Screen name="Experiences" component={ExperiencesStackScreen} />
-      <Tab.Screen name="Perfil" component={ProfileStackScreen} />
+
+      {/* To pass isGuest into stacks, use children */}
+      <Tab.Screen name="QR">
+        {() => <QRStackScreen isGuest={isGuest} />}
+      </Tab.Screen>
+
+      <Tab.Screen
+        name="Experiences"
+        listeners={({navigation}) => ({
+          tabPress: e => {
+            e.preventDefault();
+            navigation.navigate('Experiences', {
+              screen: 'ExperiencesMain',
+            });
+          },
+        })}>
+        {() => <ExperiencesStackScreen isGuest={isGuest} />}
+      </Tab.Screen>
+
+      <Tab.Screen name="Perfil">
+        {() => <ProfileStackScreen isGuest={isGuest} />}
+      </Tab.Screen>
     </Tab.Navigator>
   );
 }

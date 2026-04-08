@@ -1,3 +1,4 @@
+//Working
 import React, {useState} from 'react';
 import {useNotifications} from './NotificationProvider';
 
@@ -43,7 +44,7 @@ export default function CalificarScreen({navigation}) {
   const questions = [
     '¿Qué te parecio la calidad de los alimentos?',
     '¿Qué te parecio la calidad del servicio?',
-    '¿Cómo calificarias la relacion precio/calidad?',
+    '¿Cómo calificarías la relacion precio/calidad?',
     '¿Qué tan comodo y agradable te parecio el ambiente del restaurante (limpieza/música/iluminación/temperatura/mobiliario?',
     '¿Cómo calificarías tu experiencia en general en el restaurante?',
     '¿Qué tanto recomendarías este lugar con algun conocido?',

@@ -1,4 +1,4 @@
-// Login.js
+//Working 2 april faltan los autofill etc
 import React, {useState, useRef, useEffect} from 'react';
 import {
   View,
@@ -24,7 +24,7 @@ import {Keyboard} from 'react-native';
 
 const API_BASE = 'https://api.tab-track.com/api/mobileapp';
 const API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 const PRIMARY = '#FEFFFFFF';
 const BLUE = '#0046ff';
 
@@ -65,6 +65,7 @@ export default function Login() {
     buttonContainerMarginTop: clamp(rf(40), 12, Math.round(height * 0.45)),
     toastBottomIOS: clamp(rf(80), 40, 140),
     toastBottomAndroid: clamp(rf(40), 20, 120),
+    termsLinkBottom: clamp(rf(100), 12, 36),
   };
 
   const [booting, setBooting] = useState(true);
@@ -163,6 +164,9 @@ export default function Login() {
       minHeight: Math.round(scaled.titleFont * 1.6),
       width: '100%',
     },
+    termsLinkBottomOverride: {
+      bottom: scaled.termsLinkBottom + (insets.bottom ?? 0),
+    },
   });
 
   const [mail, setMail] = useState('');
@@ -195,11 +199,10 @@ export default function Login() {
     });
   };
 
-  const handleLogin = async emailOverride => {
+  const handleLogin = async () => {
     Keyboard.dismiss();
 
-    const emailToUse = (emailOverride ?? mail).trim();
-    if (!emailToUse || !password) {
+    if (!mail.trim() || !password) {
       return showToast('Falta correo o contraseña');
     }
 
@@ -212,7 +215,7 @@ export default function Login() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${API_TOKEN}`,
         },
-        body: JSON.stringify({mail: emailToUse, password}),
+        body: JSON.stringify({mail: mail.trim(), password}),
       });
 
       const text = await res.text();
@@ -255,7 +258,84 @@ export default function Login() {
           ['session_login_at', String(Date.now())],
           ['last_login_at', String(Date.now())],
         ]);
+        await AsyncStorage.multiRemove(['session_guest', 'session_guest_at']);
+        try {
+          let residenceActivo = null;
+          if (
+            usuario &&
+            usuario.residence_activo !== undefined &&
+            usuario.residence_activo !== null
+          ) {
+            residenceActivo = usuario.residence_activo;
+          } else if (
+            data &&
+            data.residence_activo !== undefined &&
+            data.residence_activo !== null
+          ) {
+            residenceActivo = data.residence_activo;
+          }
 
+          if (residenceActivo !== null && residenceActivo !== undefined) {
+            await AsyncStorage.setItem(
+              'user_residence_activo',
+              String(residenceActivo),
+            );
+          }
+        } catch (e) {
+          console.warn('Error guardando user_residence_activo', e);
+        }
+
+        // --- NUEVO: guardar residence_departamento_id_actual y residence_rol_actual en AsyncStorage ---
+        try {
+          // Preferir valores dentro de usuario, si no, revisar en data
+          let deptId = null;
+          let roleVal = null;
+
+          if (
+            usuario &&
+            usuario.residence_departamento_id_actual !== undefined &&
+            usuario.residence_departamento_id_actual !== null
+          ) {
+            deptId = usuario.residence_departamento_id_actual;
+          } else if (
+            data &&
+            data.residence_departamento_id_actual !== undefined &&
+            data.residence_departamento_id_actual !== null
+          ) {
+            deptId = data.residence_departamento_id_actual;
+          }
+
+          if (
+            usuario &&
+            usuario.residence_rol_actual !== undefined &&
+            usuario.residence_rol_actual !== null
+          ) {
+            roleVal = usuario.residence_rol_actual;
+          } else if (
+            data &&
+            data.residence_rol_actual !== undefined &&
+            data.residence_rol_actual !== null
+          ) {
+            roleVal = data.residence_rol_actual;
+          }
+
+          if (deptId !== null && deptId !== undefined) {
+            await AsyncStorage.setItem(
+              'user_residence_departamento_id_actual',
+              String(deptId),
+            );
+          }
+
+          if (roleVal !== null && roleVal !== undefined) {
+            await AsyncStorage.setItem(
+              'user_residence_rol_actual',
+              String(roleVal),
+            );
+          }
+        } catch (e) {
+          console.warn('Error guardando residence meta en AsyncStorage', e);
+        }
+        // -------------------------------------------------------------------------------------
         showToast(
           fullname ? `¡Bienvenid@, ${fullname}!` : '¡Bienvenid@!',
           true,
@@ -272,6 +352,9 @@ export default function Login() {
     } finally {
       setLoading(false);
     }
+  };
+  const handleOpenTerms = () => {
+    navigation.navigate('Terms');
   };
 
   useEffect(() => {
@@ -290,6 +373,34 @@ export default function Login() {
         if (sessionActive === '1') {
           navigation.reset({index: 0, routes: [{name: 'Home'}]});
           return; // keep canRenderLogin = false so Login never renders
+        }
+        // 2) Try recents first
+        const rawRecents = await AsyncStorage.getItem('recent_accounts_v1');
+        let recents = [];
+        try {
+          recents = rawRecents ? JSON.parse(rawRecents) : [];
+        } catch {
+          recents = [];
+        }
+        if (!Array.isArray(recents)) recents = [];
+
+        const top = recents[0]; // you already unshift() newest
+        const recentOk =
+          top?.email &&
+          top?.savedAt &&
+          Date.now() - Number(top.savedAt) <= QUICK_LOGIN_MAX_AGE_MS;
+
+        if (recentOk) {
+          setQuickProfile({
+            email: top.email,
+            fullname: top.fullname || '',
+            avatarUrl: top.avatarUrl || null,
+          });
+          setQuickMode(false);
+          setShowFullLogin(false);
+          setCanRenderLogin(true);
+          setBooting(false);
+          return;
         }
 
         // 2) Otherwise, proceed with your existing quick-card logic
@@ -633,6 +744,17 @@ export default function Login() {
             </TouchableOpacity>
           )}
         </Animated.View>
+        <TouchableOpacity
+          style={[
+            styles.termsFloatingContainer,
+            dynamic.termsLinkBottomOverride,
+          ]}
+          onPress={handleOpenTerms}
+          activeOpacity={0.8}>
+          <Text style={styles.termsFloatingText}>
+            Consulta términos y condiciones
+          </Text>
+        </TouchableOpacity>
       </LinearGradient>
 
       <Animated.View
@@ -759,4 +881,18 @@ const styles = StyleSheet.create({
     marginLeft: 24,
   },
   successToastText: {fontSize: 16, fontFamily: 'Montserrat-Bold'},
+  termsFloatingContainer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  termsFloatingText: {
+    color: '#000',
+    fontFamily: 'Montserrat-Regular',
+    fontSize: 13,
+    opacity: 0.95,
+    textDecorationLine: 'underline',
+  },
 });

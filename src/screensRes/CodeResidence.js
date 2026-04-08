@@ -1,3 +1,4 @@
+//9 marz
 import React, {useState, useRef, useEffect} from 'react';
 import {
   SafeAreaView,
@@ -23,7 +24,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 
 const DEFAULT_API_BASE = 'https://api.residence.tab-track.com';
 const DEFAULT_API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY'; // pon tu token fijo aquí si aplica
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78'; // pon tu token fijo aquí si aplica
 
 export default function CodeResidence(props) {
   const navigation = useNavigation();
@@ -87,7 +88,7 @@ export default function CodeResidence(props) {
     });
   };
 
-  const getStoredEmail = async () => {
+  const getStoredEmailLocal = async () => {
     const keysToTry = ['user_email', 'user_mail', 'userEmail', 'email'];
     try {
       for (const k of keysToTry) {
@@ -108,7 +109,7 @@ export default function CodeResidence(props) {
   };
 
   const callActivateApi = async (mail, tokenToSend) => {
-    const {host, token: apiToken} = await getApiConfig();
+    const {host, token: apiTokenFromConfig} = await getApiConfig();
     let base = (host || DEFAULT_API_BASE).replace(/\/$/, '');
     let endpoint = '';
     if (base.match(/\/api\/mobileapp$/i)) {
@@ -125,8 +126,8 @@ export default function CodeResidence(props) {
       Accept: 'application/json',
       'Content-Type': 'application/json',
     };
-    if (apiToken && apiToken.length > 0) {
-      headers.Authorization = `Bearer ${apiToken}`;
+    if (apiTokenFromConfig && apiTokenFromConfig.length > 0) {
+      headers.Authorization = `Bearer ${apiTokenFromConfig}`;
     }
 
     const body = {mail: mail || '', token: tokenToSend || ''};
@@ -178,7 +179,7 @@ export default function CodeResidence(props) {
     try {
       setLoading(true);
 
-      const mailFromStorage = await getStoredEmail();
+      const mailFromStorage = await getStoredEmailLocal();
       if (!mailFromStorage) {
         setLoading(false);
         showToast(
@@ -201,9 +202,8 @@ export default function CodeResidence(props) {
         return;
       }
 
-      setLoading(false);
-
       if (result.ok) {
+        setLoading(false);
         try {
           navigation.navigate('SplashResidence', {residenceCode: trimmed});
         } catch (e) {
@@ -216,6 +216,7 @@ export default function CodeResidence(props) {
         return;
       }
 
+      setLoading(false);
       const serverMsg =
         (result.json &&
           (result.json.error || result.json.message || result.json.msg)) ??
@@ -241,6 +242,7 @@ export default function CodeResidence(props) {
     <SafeAreaView style={styles.safe}>
       <TouchableOpacity
         onPress={() => navigation.goBack()}
+        hitSlop={{top: 20, bottom: 20, left: 20, right: 20}}
         style={styles.iconButton}>
         <Ionicons name="arrow-back" size={35} color="#111" />
       </TouchableOpacity>
@@ -256,7 +258,7 @@ export default function CodeResidence(props) {
           keyboardShouldPersistTaps="handled">
           <View style={styles.logoWrap}>
             <Image
-              source={require('../../assets/images/logo.png')}
+              source={require('../../assets/images/LogoRes.jpeg')}
               style={{
                 width: logoSize,
                 height: Math.round(logoSize * 0.58),

@@ -1,3 +1,4 @@
+//Working 26 feb
 import React from 'react';
 import {
   SafeAreaView,
@@ -62,8 +63,6 @@ export default function ConfirmacionPago() {
             <Text style={styles.headerTitle} numberOfLines={1}>
               Confirmación de pago
             </Text>
-
-            <View style={styles.headerRightPlaceholder} />
           </View>
 
           {/* Existing top content */}
@@ -208,7 +207,7 @@ function makeStyles({width, height, clamp, wp, hp, rf}) {
       backgroundColor: 'transparent',
       flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'space-between',
+      justifyContent: 'center',
       paddingHorizontal: basePad,
       paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0,
     },
@@ -222,9 +221,7 @@ function makeStyles({width, height, clamp, wp, hp, rf}) {
       fontWeight: '800',
       color: '#fff',
       textAlign: 'center',
-      flex: 1,
     },
-    headerRightPlaceholder: {width: 44},
 
     iconSize, // numeric
 

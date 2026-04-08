@@ -1,4 +1,4 @@
-// CuentaResidence.js ios
+// CuentaResidence.js ios works 7april
 import React, {useEffect, useState, useCallback, useRef, useMemo} from 'react';
 import {
   SafeAreaView,
@@ -28,7 +28,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 const API_BASE_URL = 'https://api.residence.tab-track.com';
 const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const VISITS_STORAGE_KEY = 'user_visits';
 const PENDING_VISITS_KEY = 'pending_visits';
@@ -220,7 +220,10 @@ export default function CuentaResidence() {
 
   const [noSaleModalVisible, setNoSaleModalVisible] = useState(false);
   const [noSaleModalMessage, setNoSaleModalMessage] = useState('');
-
+  const [accountOpening, setAccountOpening] = useState(false);
+  const [accountOpened, setAccountOpened] = useState(false);
+  const [canOpenAccount, setCanOpenAccount] = useState(false);
+  const [approveLoading, setApproveLoading] = useState(false);
   const [discountAmount, setDiscountAmount] = useState(0);
   const isMountedRef = useRef(true);
   useEffect(() => {
@@ -253,10 +256,6 @@ export default function CuentaResidence() {
     }
   };
 
-  const [accountOpening, setAccountOpening] = useState(false);
-  const [accountOpened, setAccountOpened] = useState(false);
-  const [canOpenAccount, setCanOpenAccount] = useState(false);
-  const [approveLoading, setApproveLoading] = useState(false);
   // NOTA: quité approvingModalVisible porque ya no vamos a mostrar la modal "Aprobando consumo"
 
   const applyResolveJsonToState = useCallback(json => {
@@ -737,6 +736,8 @@ export default function CuentaResidence() {
           restauranteId: json.restaurante_id ?? restauranteId,
           sucursalId: json.sucursal_id ?? sucursalId,
           rawResponse: json,
+          // ADICIÓN: envío de edificio_id hacia la pantalla de confirmación
+          edificioId: json.edificio_id ?? json.edificioId ?? null,
         });
       } catch (e) {
         // fallback: volver a la pantalla de QR si la navegación falla
@@ -872,11 +873,11 @@ export default function CuentaResidence() {
                 </Text>
               </TouchableOpacity>
 
-              <TouchableOpacity
+              {/*   <TouchableOpacity
                 style={[styles.modalBtnGhost]}
                 onPress={() => setErrorModalVisible(false)}>
                 <Text style={styles.modalBtnGhostText}>Cerrar</Text>
-              </TouchableOpacity>
+              </TouchableOpacity> */}
             </View>
           </LinearGradient>
         </View>
@@ -1234,9 +1235,13 @@ export default function CuentaResidence() {
                 <Text
                   style={[
                     styles.smallPrimaryButtonText,
-                    {fontSize: clamp(rf(3.2), 14, 16)},
+                    {
+                      fontSize: clamp(rf(3.2), 14, 16),
+                    },
                   ]}>
-                  {accountOpened ? 'Validar consumo' : 'Empezar consumo'}
+                  {accountOpened
+                    ? 'Validar consumo'
+                    : 'Empezar consumo - Es necesario hacer una segunda verificacion'}
                 </Text>
               )}
             </TouchableOpacity>
@@ -1390,6 +1395,7 @@ const styles = StyleSheet.create({
   smallPrimaryButton: {
     backgroundColor: '#0046ff',
     borderRadius: 22,
+    paddingHorizontal: 3,
     alignItems: 'center',
     marginTop: 18,
     shadowColor: '#085bff',
@@ -1398,7 +1404,14 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 3,
   },
-  smallPrimaryButtonText: {color: '#fff', fontWeight: '800'},
+  smallPrimaryButtonText: {
+    color: '#fff',
+    fontWeight: '800',
+    justifyContent: 'center',
+    alignItems: 'center',
+
+    textAlign: 'center',
+  },
 
   secondaryButton: {
     backgroundColor: '#fff',
@@ -1421,8 +1434,14 @@ const styles = StyleSheet.create({
     zIndex: 999,
     backgroundColor: 'rgba(0,0,0,0.45)',
   },
-  modalBox: {borderRadius: 12, padding: 18, alignItems: 'center'},
-  modalTitle: {color: '#fff', fontSize: 18, fontWeight: '800', marginBottom: 8},
+  modalBox: {borderRadius: 12, alignItems: 'center'},
+  modalTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 8,
+    paddingTop: 18,
+  },
   modalMessage: {
     color: '#fff',
     fontSize: 14,
@@ -1434,6 +1453,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     width: '100%',
     justifyContent: 'space-between',
+    paddingBottom: 18,
+    paddingHorizontal: 18,
   },
   modalBtnPrimary: {
     flex: 1,

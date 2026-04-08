@@ -1,4 +1,5 @@
-import React, {useMemo, useState, useEffect} from 'react';
+//Sirve 9 marz changes not implemented due to design
+import React, {useMemo, useState, useEffect, useRef} from 'react';
 import {
   View,
   Text,
@@ -30,7 +31,7 @@ const FILTER_OPTIONS = [
 
 const API_URL = 'https://api.residence.tab-track.com';
 const TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3MDEzNjkxMCwianRpIjoiMzM3YjlkY2YtYjlkMi00NjFjLTkxMDItYzlkZjFkNDFlYmFjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzAxMzY5MTAsImV4cCI6MTc3MjcyODkxMCwicm9sIjoiRWRpdG9yIn0.GVPx2mKxkE7qZQ9AozQnldLlkogOOLksbetncQ8BgmY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 export default function FeedResicende() {
   const navigation = useNavigation();
@@ -56,6 +57,10 @@ export default function FeedResicende() {
 
   const [notices, setNotices] = useState([]);
   const [restaurants, setRestaurants] = useState([]);
+  const filterBtnRef = useRef(null);
+  const flatListRef = useRef(null);
+  const [scrollY, setScrollY] = useState(0);
+  const [filterBtnRect, setFilterBtnRect] = useState(null);
 
   const getHeaders = () => {
     const h = {Accept: 'application/json', 'Content-Type': 'application/json'};
@@ -88,6 +93,59 @@ export default function FeedResicende() {
     return null;
   };
 
+  const formatDateShortWithTime = dateRaw => {
+    // If the API did not send a date, return an empty string
+    if (!dateRaw) return '';
+
+    // Parse naive timestamps like:
+    // "2026-04-01T20:37:55"
+    // "2026-04-01 20:37:55"
+    // We extract year, month, day, hour, minute, and optional seconds
+    const m = String(dateRaw).match(
+      /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/,
+    );
+
+    // If the value does not match the expected format, return empty
+    if (!m) return '';
+
+    const [, yyyy, mm, dd, hh, min, ss = '00'] = m;
+
+    // IMPORTANT:
+    // The backend is sending timestamps without timezone info.
+    // We are interpreting those values as UTC, not as device-local time.
+    //
+    // Example:
+    // "2026-04-01T20:37:55"
+    // is treated as:
+    // "2026-04-01 20:37:55 UTC"
+    //
+    // Then JavaScript converts that exact instant to the device local timezone
+    // when we later use getDate(), getHours(), getMinutes(), etc.
+    const d = new Date(
+      Date.UTC(
+        Number(yyyy),
+        Number(mm) - 1, // JS months are 0-based: January = 0
+        Number(dd),
+        Number(hh),
+        Number(min),
+        Number(ss),
+      ),
+    );
+
+    // Safety check in case the constructed date is invalid
+    if (isNaN(d.getTime())) return '';
+
+    // Format the date in the device's local timezone as:
+    // dd/mm/yy hh:mm
+    const outDD = String(d.getDate()).padStart(2, '0');
+    const outMM = String(d.getMonth() + 1).padStart(2, '0');
+    const outYY = String(d.getFullYear()).slice(-2);
+    const outHH = String(d.getHours()).padStart(2, '0');
+    const outMin = String(d.getMinutes()).padStart(2, '0');
+
+    return `${outDD}/${outMM}/${outYY} ${outHH}:${outMin}`;
+  };
+
   const mapApiAvisoToNotice = apiItem => {
     const id = apiItem.id ?? String(Math.random()).slice(2, 9);
     const title = apiItem.titulo ?? apiItem.title ?? '';
@@ -98,12 +156,9 @@ export default function FeedResicende() {
       : 'Comunidad';
     const dateRaw =
       apiItem.publicado_en ?? apiItem.publicado ?? apiItem.date ?? null;
-    const date = dateRaw
-      ? new Date(dateRaw).toLocaleString('es-MX', {
-          dateStyle: 'short',
-          timeStyle: 'short',
-        })
-      : '';
+    // formato pedido: DD/MM/YY HH:MM (sin segundos)
+    const date = dateRaw ? formatDateShortWithTime(dateRaw) : '';
+    console.log('mapped date......:', {dateRaw, date});
     const body = apiItem.contenido ?? apiItem.body ?? '';
     const priorityRaw = (apiItem.prioridad ?? apiItem.priority ?? '')
       .toString()
@@ -449,6 +504,7 @@ export default function FeedResicende() {
     const urgent = item.priority === 'urgente';
     const titleRightPad = urgent ? 100 : 0;
     const contentPaddingRight = 16;
+    console.log('render notice date:', item.title, item.date);
 
     return (
       <View
@@ -833,30 +889,25 @@ export default function FeedResicende() {
           </Pressable>
 
           {dropdownVisible && (
-            <View
-              style={[
-                stylesN.dropdown,
-                {
-                  top: filterBtnHeight + 10,
-                  zIndex: 99999,
-                  elevation: 99999,
-                  overflow: 'visible',
-                },
-              ]}>
-              {FILTER_OPTIONS.map(opt => (
-                <TouchableOpacity
-                  key={opt}
-                  onPress={() => onSelectFilter(opt)}
-                  style={stylesN.dropdownOption}>
-                  <Text
-                    style={[
-                      stylesN.dropdownText,
-                      opt === selectedFilter ? {fontWeight: '800'} : {},
-                    ]}>
-                    {opt}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+            <View style={stylesN.dropdown}>
+              <FlatList
+                data={FILTER_OPTIONS}
+                keyExtractor={opt => opt}
+                renderItem={({item: opt}) => (
+                  <TouchableOpacity
+                    onPress={() => onSelectFilter(opt)}
+                    style={stylesN.dropdownOption}>
+                    <Text
+                      style={[
+                        stylesN.dropdownText,
+                        opt === selectedFilter ? {fontWeight: '800'} : null,
+                      ]}>
+                      {opt}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                nestedScrollEnabled
+              />
             </View>
           )}
         </View>
@@ -1130,7 +1181,7 @@ function makeStyles({
     },
 
     dropdown: {
-      position: 'absolute',
+      top: 5,
       left: 0,
       right: 0,
       zIndex: 9999,

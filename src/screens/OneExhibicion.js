@@ -1,3 +1,4 @@
+//Cambio flujo
 import React, {useMemo} from 'react';
 import {
   SafeAreaView,
@@ -167,6 +168,17 @@ export default function OneExhibicion() {
     () => items.reduce((s, it) => s + Number(it.paidAmount || 0), 0),
     [items],
   );
+  const discountAmount =
+    Number(
+      params.descuentos_venta?.monto_total ??
+        params.totales_venta?.total_descuentos ??
+        params.total_descuentos ??
+        params.total_descuento ??
+        params.descuento ??
+        params.discount_amount ??
+        params.monto_descuento ??
+        0,
+    ) || 0;
 
   const pendingFromParams = Number(
     params.total_pending ??
@@ -175,7 +187,12 @@ export default function OneExhibicion() {
       NaN,
   );
   const hasPendingFromParams = !Number.isNaN(pendingFromParams);
-  const pendingTotalFromItems = +(originalTotal - paidSum).toFixed(2);
+
+  const pendingTotalFromItems = +(
+    originalTotal -
+    paidSum -
+    discountAmount
+  ).toFixed(2);
   const pendingTotal = hasPendingFromParams
     ? Number(pendingFromParams)
     : pendingTotalFromItems >= 0
@@ -306,8 +323,19 @@ export default function OneExhibicion() {
       (s, it) => s + Number(it.lineTotal || 0),
       0,
     );
-    const ivaToCharge = +((totalToCharge / 1.16) * 0.16).toFixed(2);
-    const subtotalToCharge = +(totalToCharge - ivaToCharge).toFixed(2);
+    const computedTotalAfterDiscount = +(
+      totalToCharge - discountAmount
+    ).toFixed(2);
+    const safeComputedTotalAfterDiscount =
+      computedTotalAfterDiscount >= 0 ? computedTotalAfterDiscount : 0;
+
+    const ivaToCharge = +(
+      (safeComputedTotalAfterDiscount / 1.16) *
+      0.16
+    ).toFixed(2);
+    const subtotalToCharge = +(
+      safeComputedTotalAfterDiscount - ivaToCharge
+    ).toFixed(2);
 
     const tipObj = tipApplied ?? params.tipApplied ?? null;
     const tipAmount = tipObj
@@ -320,19 +348,62 @@ export default function OneExhibicion() {
       ? Number(
           tipObj.totalWithTip ||
             tipObj.total_with_tip ||
-            totalToCharge + tipAmount,
+            safeComputedTotalAfterDiscount + tipAmount,
         )
-      : totalToCharge + tipAmount;
+      : safeComputedTotalAfterDiscount + tipAmount;
+
+    const finalSubtotal = Number(
+      params.subtotal ?? pSubtotal ?? subtotalToCharge ?? subtotal,
+    );
+    const finalIva = Number(params.iva ?? pIva ?? ivaToCharge ?? iva);
+    const finalTotal = Number(
+      params.total ?? pTotal ?? safeComputedTotalAfterDiscount ?? pendingTotal,
+    );
+    const finalTotalWithTip = Number(
+      params.totalWithTip ??
+        pTotalWithTip ??
+        finalTotal + (tipAmount || 0) ??
+        totalWithTip,
+    );
+
+    const itemsPayload = itemsToPay.map(it => ({
+      id: it.id,
+      name: it.name,
+      qty: 1,
+      unitPrice: Number(it.unitPrice || it.price || 0),
+      price: Number(it.lineTotal || it.price || 0),
+      lineTotal: Number(it.lineTotal || it.price || 0),
+      paid: !!it.paid,
+      paidPartial: !!it.paidPartial,
+      paidAmount: Number(it.paidAmount || 0),
+      canceled: !!it.canceled,
+      raw: it.raw ?? null,
+    }));
+
+    const originalItems = items.map(it => ({
+      id: it.id,
+      name: it.name,
+      qty: Number(it.qty || 1),
+      unitPrice: Number(it.unitPrice || it.price || 0),
+      lineTotal: Number(it.lineTotal || 0),
+      paid: !!it.paid,
+      paidPartial: !!it.paidPartial,
+      paidAmount: Number(it.paidAmount || 0),
+      canceled: !!it.canceled,
+      raw: it.raw ?? null,
+    }));
 
     const payload = {
       token,
-      items: itemsToPay,
-      subtotal: subtotalToCharge,
-      iva: ivaToCharge,
-      total: totalToCharge,
+      items: itemsPayload,
+      originalItems: originalItems,
+
+      subtotal: finalSubtotal,
+      iva: finalIva,
+      total: finalTotal,
       tipAmount: tipAmount,
       tipPercent: tipPercent,
-      totalWithTip: totalWithTip,
+      totalWithTip: finalTotalWithTip,
       people,
       sale_id,
       saleId: sale_id,
@@ -347,14 +418,16 @@ export default function OneExhibicion() {
       moneda,
       mesero,
       restaurantImage,
-      originalItems: items,
+
       total_pending: pendingTotal,
+      monto_descuento: discountAmount,
+      descuento: discountAmount,
     };
 
-    payload.displayTotal = shownTotal;
+    payload.displayTotal = finalTotalWithTip;
 
     console.log(
-      'OneExhibicion -> navegando a Payment con payload:',
+      'OneExhibicion -> navegando a Payment con payload (CON items):',
       JSON.stringify(payload, null, 2),
     );
     navigation.navigate('Payment', payload);
@@ -427,7 +500,6 @@ export default function OneExhibicion() {
 
         <View style={styles.content}>
           <Text style={styles.sectionTitle}>Desglose</Text>
-
           <FlatList
             data={items}
             keyExtractor={(it, i) => (it.id ? String(it.id) : String(i))}
@@ -439,26 +511,29 @@ export default function OneExhibicion() {
               </Text>
             }
           />
-
           <View style={styles.separator} />
-
           <View style={styles.row}>
             <Text style={styles.label}>Sub total</Text>
             <Text style={styles.value}>{formatMoney(subtotal)} MXN</Text>
           </View>
-
           <View style={styles.row}>
             <Text style={styles.label}>IVA (estimado)</Text>
             <Text style={styles.value}>{formatMoney(iva)} MXN</Text>
           </View>
-
+          {discountAmount > 0 ? (
+            <View style={styles.row}>
+              <Text style={styles.label}>Descuento</Text>
+              <Text style={styles.value}>
+                -{formatMoney(discountAmount)} MXN
+              </Text>
+            </View>
+          ) : null}
           <View style={[styles.row, {marginTop: 8}]}>
             <Text style={[styles.label, styles.bold]}>Total pendiente</Text>
             <Text style={[styles.value, styles.boldValue]}>
               {formatMoney(pendingTotal)} MXN
             </Text>
           </View>
-
           {tipApplied && (
             <>
               <View style={styles.row}>
@@ -492,14 +567,12 @@ export default function OneExhibicion() {
               </View>
             </>
           )}
-
           <View style={{height: 12}} />
-
           <TouchableOpacity
             style={styles.primaryButton}
             onPress={goToPropina}
             activeOpacity={0.9}>
-            <Text style={styles.primaryButtonText}>Pagar</Text>
+            <Text style={styles.primaryButtonText}>Continuar</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
