@@ -94,6 +94,7 @@ export default function WelcomeScreen() {
       fontSize: scaled.titleFont,
       color: '#000',
       textAlign: 'center',
+      fontWeight: '800',
       fontFamily: 'Montserrat-Bold',
     },
     carita: {
@@ -183,6 +184,7 @@ export default function WelcomeScreen() {
       lineHeight: Math.round(scaled.buttonTextSize * 1.32),
       fontFamily: 'Montserrat-Regular',
       paddingBottom: Platform.OS === 'ios' ? 1 : 0,
+      fontWeight: '700',
     },
     buttonTextWhite: {
       color: '#fff',
@@ -214,7 +216,7 @@ export default function WelcomeScreen() {
       <View style={dynamicStyles.buttonContainer}>
         <TouchableOpacity
           style={dynamicStyles.primaryButtonWrapper}
-          onPress={() => navigation.navigate('Login')}
+          onPress={() => navigation.navigate('Recent')}
           activeOpacity={0.85}
           hitSlop={{top: 6, bottom: 6, left: 8, right: 8}}>
           <View style={dynamicStyles.primaryButtonInner}>

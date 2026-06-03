@@ -1,5 +1,5 @@
-//Working 2 april faltan los autofill etc
-import React, {useState, useRef, useEffect} from 'react';
+//oneSignal
+import React, {useState, useRef} from 'react';
 import {
   View,
   Text,
@@ -21,12 +21,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {Keyboard} from 'react-native';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
+import {
+  setOneSignalExternalUserId,
+  sendOneSignalTags,
+} from '../services/oneSignalService';
 
 const API_BASE = 'https://api.tab-track.com/api/mobileapp';
-const API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 const PRIMARY = '#FEFFFFFF';
 const BLUE = '#0046ff';
+const DEFAULT_HOME_KEY = 'user_default_home';
 
 export default function Login() {
   const navigation = useNavigation();
@@ -37,12 +41,7 @@ export default function Login() {
   const rf = size => Math.round((size * width) / BASE_WIDTH);
   const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
-  const QUICK_LOGIN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
   const shiftY = useRef(new Animated.Value(-10)).current;
-
-  const [quickProfile, setQuickProfile] = useState(null); // { email, fullname, avatarUrl }
-  const [quickMode, setQuickMode] = useState(false); // when true -> password-only UI
-  const [showFullLogin, setShowFullLogin] = useState(false);
 
   const scaled = {
     paddingVertical: clamp(rf(10), 35, 0),
@@ -68,8 +67,6 @@ export default function Login() {
     termsLinkBottom: clamp(rf(100), 12, 36),
   };
 
-  const [booting, setBooting] = useState(true);
-
   const topInset = Math.max(insets.top ?? 0, StatusBar.currentHeight ?? 0);
   const headerApprox = 56;
   const keyboardVerticalOffset =
@@ -85,32 +82,6 @@ export default function Login() {
   const successToastBottom = toastBottom + 20;
 
   const titleCaritaSpacing = clamp(Math.round(scaled.titleFont * 0.5), 1, 8);
-
-  const isMode1 = quickProfile && !quickMode && !showFullLogin;
-  const isMode2 = quickProfile && quickMode && !showFullLogin;
-  const isMode3 = showFullLogin;
-
-  const handleBack = () => {
-    // MODE 2 → MODE 1
-    if (isMode2) {
-      setQuickMode(false);
-      setPassword('');
-      return;
-    }
-
-    // MODE 3 → MODE 1 (if quick profile exists)
-    if (isMode3 && quickProfile) {
-      setShowFullLogin(false);
-      setPassword('');
-      return;
-    }
-    // Fallback (no quick profile at all)
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-    } else {
-      navigation.navigate('Welcome');
-    }
-  };
 
   const dynamic = StyleSheet.create({
     containerOverride: {
@@ -177,8 +148,6 @@ export default function Login() {
   const [toastStyle, setToastStyle] = useState(styles.toast);
   const toastAnim = useRef(new Animated.Value(0)).current;
 
-  const [canRenderLogin, setCanRenderLogin] = useState(false);
-
   const showToast = (message, success = false, duration = 1500, cb) => {
     setToastMsg(message);
     setToastStyle(success ? styles.successToast : styles.toast);
@@ -208,12 +177,16 @@ export default function Login() {
 
     setLoading(true);
     try {
+      await ensureToken();
+      const token =
+        typeof TOKEN === 'string' && TOKEN.trim() ? TOKEN.trim() : null;
+
       const url = `${API_BASE}/usuarios/validate-password`;
       const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${API_TOKEN}`,
+          ...(token ? {Authorization: `Bearer ${token}`} : {}),
         },
         body: JSON.stringify({mail: mail.trim(), password}),
       });
@@ -238,8 +211,9 @@ export default function Login() {
         if (usuario.usuario_app_id) {
           await AsyncStorage.setItem(
             'user_usuario_app_id',
-            usuario.usuario_app_id,
+            String(usuario.usuario_app_id),
           );
+          await setOneSignalExternalUserId(usuario.usuario_app_id);
         }
 
         await AsyncStorage.setItem('user_valid', String(data.valid));
@@ -253,12 +227,6 @@ export default function Login() {
           await AsyncStorage.setItem('user_email', usuario.mail);
         }
 
-        await AsyncStorage.multiSet([
-          ['session_active', '1'],
-          ['session_login_at', String(Date.now())],
-          ['last_login_at', String(Date.now())],
-        ]);
-        await AsyncStorage.multiRemove(['session_guest', 'session_guest_at']);
         try {
           let residenceActivo = null;
           if (
@@ -280,6 +248,9 @@ export default function Login() {
               'user_residence_activo',
               String(residenceActivo),
             );
+            await sendOneSignalTags({
+              residence_activo: String(residenceActivo),
+            });
           }
         } catch (e) {
           console.warn('Error guardando user_residence_activo', e);
@@ -336,27 +307,117 @@ export default function Login() {
           console.warn('Error guardando residence meta en AsyncStorage', e);
         }
         // -------------------------------------------------------------------------------------
+        // NUEVO: guardar admin_id_actual y edificio_id_actual
+        try {
+          let adminIdActual = null;
+          let edificioIdActual = null;
+          let environmentVal = null;
+
+          if (
+            usuario &&
+            usuario.admin_id_actual !== undefined &&
+            usuario.admin_id_actual !== null
+          ) {
+            adminIdActual = usuario.admin_id_actual;
+          } else if (
+            data &&
+            data.admin_id_actual !== undefined &&
+            data.admin_id_actual !== null
+          ) {
+            adminIdActual = data.admin_id_actual;
+          }
+
+          if (
+            usuario &&
+            usuario.edificio_id_actual !== undefined &&
+            usuario.edificio_id_actual !== null
+          ) {
+            edificioIdActual = usuario.edificio_id_actual;
+          } else if (
+            data &&
+            data.edificio_id_actual !== undefined &&
+            data.edificio_id_actual !== null
+          ) {
+            edificioIdActual = data.edificio_id_actual;
+          }
+          if (
+            usuario &&
+            usuario.environment !== undefined &&
+            usuario.environment !== null
+          ) {
+            environmentVal = usuario.environment;
+          } else if (
+            data &&
+            data.environment !== undefined &&
+            data.environment !== null
+          ) {
+            environmentVal = data.environment;
+          }
+
+          if (adminIdActual !== null && adminIdActual !== undefined) {
+            await AsyncStorage.setItem(
+              'user_admin_id_actual',
+              String(adminIdActual),
+            );
+          }
+
+          if (edificioIdActual !== null && edificioIdActual !== undefined) {
+            await AsyncStorage.setItem(
+              'user_edificio_id_actual',
+              String(edificioIdActual),
+            );
+          }
+          if (environmentVal !== null && environmentVal !== undefined) {
+            await AsyncStorage.setItem(
+              'user_environment',
+              String(environmentVal),
+            );
+          }
+        } catch (e) {
+          console.warn(
+            'Error guardando admin_id_actual / edificio_id_actual / environment en AsyncStorage',
+            e,
+          );
+        }
+
+        await AsyncStorage.multiSet([
+          ['session_active', '1'],
+          ['session_guest', '0'],
+          ['last_login_at', String(Date.now())],
+        ]);
+
+        await AsyncStorage.removeItem('session_guest_at');
+
+        const defaultHome = await AsyncStorage.getItem(DEFAULT_HOME_KEY);
+        const targetRoute =
+          defaultHome === 'residence' ? 'HomeResidence' : 'Home';
+
         showToast(
-          fullname ? `¡Bienvenid@, ${fullname}!` : '¡Bienvenid@!',
+          fullname ? `¡Bienvenido, ${fullname}!` : '¡Bienvenido!',
           true,
           700,
-          () => navigation.replace('Home'),
+          () =>
+            navigation.reset({
+              index: 0,
+              routes: [{name: targetRoute}],
+            }),
         );
       } else {
         const errMsg =
           data?.error || data?.message || 'Correo o contraseña inválidos';
         showToast(errMsg);
       }
-    } catch {
+    } catch (err) {
       showToast('Error de red');
     } finally {
       setLoading(false);
     }
   };
+
   const handleOpenTerms = () => {
     navigation.navigate('Terms');
   };
-
+  /*
   useEffect(() => {
     let alive = true;
 
@@ -452,6 +513,7 @@ export default function Login() {
   if (!canRenderLogin) {
     return <View style={{flex: 1, backgroundColor: '#fff'}} />;
   }
+*/
 
   return (
     <View style={{width: '100%', flex: 1, backgroundColor: '#fff'}}>
@@ -462,148 +524,52 @@ export default function Login() {
         end={{x: 1, y: 0}}
         style={[styles.container, dynamic.containerOverride]}>
         <TouchableOpacity
-          onPress={handleBack}
+          onPress={() => navigation.goBack()}
           style={styles.backButton}
           accessibilityLabel="Volver">
           <Ionicons name="arrow-back" size={24} color={BLUE} />
         </TouchableOpacity>
-
         <Image
           source={require('../../assets/images/logo.png')}
           style={[styles.logo, dynamic.logoOverride]}
         />
-
-        {!(quickProfile && quickMode && !showFullLogin) && (
-          <View style={dynamic.titleCaritaContainer}>
-            <Text style={[styles.title, dynamic.titleOverride]}>¡Hola!</Text>
-            <Text style={[styles.carita, dynamic.caritaOverride]}>:)</Text>
-          </View>
-        )}
-
-        <Animated.View
-          style={{
-            flex: 1,
-            width: '100%',
-            alignItems: 'center',
-            transform: [{translateY: shiftY}],
-          }}>
-          {/* MODE 1: QUICK CARD*/}
-          {quickProfile && !showFullLogin && !quickMode ? (
-            <View
+        <View style={dynamic.titleCaritaContainer}>
+          <Text style={[styles.title, dynamic.titleOverride]}>¡Hola!</Text>
+          <Text style={[styles.carita, dynamic.caritaOverride]}>:)</Text>
+        </View>
+        {/*
+        MODE 1: QUICK CARD
+        {quickProfile && !showFullLogin && !quickMode ? (
+          <View
+            style={{
+              width: '80%',
+              marginTop: 20,
+              alignItems: 'center',
+            }}>
+            <TouchableOpacity
+              onPress={() => {
+                setMail(quickProfile.email);
+                setPassword('');
+                setQuickMode(true);
+              }}
               style={{
-                width: '80%',
-                marginTop: 20,
-
+                borderWidth: 1,
+                borderColor: '#ddd',
+                borderRadius: 16,
+                padding: 14,
+                flexDirection: 'row',
                 alignItems: 'center',
               }}>
-              <TouchableOpacity
-                onPress={() => {
-                  setMail(quickProfile.email);
-                  setPassword('');
-                  setQuickMode(true);
-                }}
-                style={{
-                  borderWidth: 1,
-                  borderColor: '#ddd',
-                  borderRadius: 16,
-                  padding: 14,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                }}>
-                <View
-                  style={{
-                    width: 54,
-                    height: 54,
-                    borderRadius: 27,
-                    overflow: 'hidden',
-                    backgroundColor: '#f3f6ff',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginRight: 12,
-                  }}>
-                  {quickProfile.avatarUrl ? (
-                    <Image
-                      source={{uri: quickProfile.avatarUrl}}
-                      style={{width: '100%', height: '100%'}}
-                    />
-                  ) : (
-                    <Text style={{fontSize: 18, fontWeight: '700'}}>👤</Text>
-                  )}
-                </View>
-
-                <View style={{flex: 1}}>
-                  <Text
-                    style={{fontSize: 16, fontWeight: '700', color: '#000'}}>
-                    {quickProfile.fullname || 'Continuar'}
-                  </Text>
-                  <Text style={{fontSize: 12, color: '#555', marginTop: 2}}>
-                    {quickProfile.email}
-                  </Text>
-                  <Text style={{fontSize: 12, color: BLUE, marginTop: 6}}>
-                    Toca para continuar
-                  </Text>
-                </View>
-              </TouchableOpacity>
-
-              <Text
-                style={{
-                  marginTop: 22,
-                  color: '#000',
-                  opacity: 0.8,
-                  textAlign: 'center',
-                  marginBottom: 5,
-                  fontSize: 15,
-                }}>
-                ¿No eres tú?
-              </Text>
-
-              <TouchableOpacity
-                style={[
-                  styles.inicio,
-                  dynamic.inicioOverride,
-                  {
-                    backgroundColor: '#fff',
-                    borderWidth: 1,
-                    borderColor: BLUE,
-                  },
-                ]}
-                onPress={() => {
-                  setShowFullLogin(true);
-                  setQuickMode(false);
-                  setMail('');
-                  setPassword('');
-                }}>
-                <Text
-                  style={[
-                    styles.buttonText,
-                    dynamic.buttonTextOverride,
-                    {color: BLUE},
-                  ]}>
-                  Usar otra cuenta
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          {/* MODE 2: PASSWORD-ONLY (quick mode) */}
-          {quickProfile && quickMode && !showFullLogin ? (
-            <View
-              style={{
-                width: '100%',
-                alignItems: 'center',
-                marginTop: 30,
-              }}>
-              {/* Avatar */}
               <View
                 style={{
-                  width: 90,
-                  height: 90,
-                  borderRadius: 45,
+                  width: 54,
+                  height: 54,
+                  borderRadius: 27,
                   overflow: 'hidden',
-                  backgroundColor: '#f2f2f2',
+                  backgroundColor: '#f3f6ff',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  marginBottom: 14,
+                  marginRight: 12,
                 }}>
                 {quickProfile.avatarUrl ? (
                   <Image
@@ -611,139 +577,209 @@ export default function Login() {
                     style={{width: '100%', height: '100%'}}
                   />
                 ) : (
-                  <Ionicons name="person" size={48} color="#888" />
+                  <Text style={{fontSize: 18, fontWeight: '700'}}>👤</Text>
                 )}
               </View>
 
-              {/* Username */}
+              <View style={{flex: 1}}>
+                <Text
+                  style={{fontSize: 16, fontWeight: '700', color: '#000'}}>
+                  {quickProfile.fullname || 'Continuar'}
+                </Text>
+                <Text style={{fontSize: 12, color: '#555', marginTop: 2}}>
+                  {quickProfile.email}
+                </Text>
+                <Text style={{fontSize: 12, color: BLUE, marginTop: 6}}>
+                  Toca para continuar
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <Text
+              style={{
+                marginTop: 22,
+                color: '#000',
+                opacity: 0.8,
+                textAlign: 'center',
+                marginBottom: 5,
+                fontSize: 15,
+              }}>
+              ¿No eres tú?
+            </Text>
+
+            <TouchableOpacity
+              style={[
+                styles.inicio,
+                dynamic.inicioOverride,
+                {
+                  backgroundColor: '#fff',
+                  borderWidth: 1,
+                  borderColor: BLUE,
+                },
+              ]}
+              onPress={() => {
+                setShowFullLogin(true);
+                setQuickMode(false);
+                setMail('');
+                setPassword('');
+              }}>
+              <Text
+                style={[
+                  styles.buttonText,
+                  dynamic.buttonTextOverride,
+                  {color: BLUE},
+                ]}>
+                Usar otra cuenta
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        MODE 2: PASSWORD-ONLY (quick mode)
+        {quickProfile && quickMode && !showFullLogin ? (
+          <View
+            style={{
+              width: '100%',
+              alignItems: 'center',
+              marginTop: 30,
+            }}>
+            // Avatar
+            <View
+              style={{
+                width: 90,
+                height: 90,
+                borderRadius: 45,
+                overflow: 'hidden',
+                backgroundColor: '#f2f2f2',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginBottom: 14,
+              }}>
+              {quickProfile.avatarUrl ? (
+                <Image
+                  source={{uri: quickProfile.avatarUrl}}
+                  style={{width: '100%', height: '100%'}}
+                />
+              ) : (
+                <Ionicons name="person" size={48} color="#888" />
+              )}
+            </View>
+
+            // Username
+            <Text
+              style={{
+                fontSize: 18,
+                fontFamily: 'Montserrat-Bold',
+                color: '#000',
+                marginBottom: 18,
+              }}>
+              {quickProfile.email}
+            </Text>
+
+            // Password input
+            <TextInput
+              style={[
+                styles.input,
+                styles.inputBorder,
+                dynamic.inputOverride,
+                {
+                  width: '80%',
+                  backgroundColor: '#fff',
+                },
+              ]}
+              placeholder="Password"
+              placeholderTextColor="#999"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              autoCapitalize="none"
+            />
+
+            // Login button
+            <TouchableOpacity
+              style={[
+                styles.inicio,
+                dynamic.inicioOverride,
+                {
+                  width: '80%',
+                  marginTop: 18,
+                },
+                (loading || !password) && {opacity: 0.6},
+              ]}
+              onPress={() => handleLogin(quickProfile.email)}
+              disabled={loading || !password}>
+              {loading ? (
+                <ActivityIndicator color={PRIMARY} />
+              ) : (
+                <Text style={[styles.buttonText, dynamic.buttonTextOverride]}>
+                  Continuar
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            // Forgot password
+            <TouchableOpacity
+              onPress={() => navigation.navigate('SendEmail')}
+              style={{marginTop: 18}}>
               <Text
                 style={{
-                  fontSize: 18,
-                  fontFamily: 'Montserrat-Bold',
-                  color: '#000',
-                  marginBottom: 18,
+                  color: BLUE,
+                  fontSize: 14,
+                  fontFamily: 'Montserrat-Regular',
                 }}>
-                {quickProfile.email}
-              </Text>
-
-              {/* Password input */}
-              <TextInput
-                style={[
-                  styles.input,
-                  styles.inputBorder,
-                  dynamic.inputOverride,
-                  {
-                    width: '80%',
-                    backgroundColor: '#fff',
-                  },
-                ]}
-                placeholder="Password"
-                placeholderTextColor="#999"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                autoCapitalize="none"
-              />
-
-              {/* Login button */}
-              <TouchableOpacity
-                style={[
-                  styles.inicio,
-                  dynamic.inicioOverride,
-                  {
-                    width: '80%',
-                    marginTop: 18,
-                  },
-                  (loading || !password) && {opacity: 0.6},
-                ]}
-                onPress={() => handleLogin(quickProfile.email)}
-                disabled={loading || !password}>
-                {loading ? (
-                  <ActivityIndicator color={PRIMARY} />
-                ) : (
-                  <Text style={[styles.buttonText, dynamic.buttonTextOverride]}>
-                    Continuar
-                  </Text>
-                )}
-              </TouchableOpacity>
-
-              {/* Forgot password */}
-              <TouchableOpacity
-                onPress={() => navigation.navigate('SendEmail')}
-                style={{marginTop: 18}}>
-                <Text
-                  style={{
-                    color: BLUE,
-                    fontSize: 14,
-                    fontFamily: 'Montserrat-Regular',
-                  }}>
-                  ¿Se te olvidó tu contraseña?
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          {/* MODE 3: FULL LOGIN (email + password) */}
-          {showFullLogin ? (
-            <>
-              <TextInput
-                style={[
-                  styles.input,
-                  styles.inputBorder,
-                  dynamic.inputOverride,
-                ]}
-                placeholder="Correo electrónico"
-                placeholderTextColor="#000"
-                value={mail}
-                onChangeText={setMail}
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-
-              <TextInput
-                style={[
-                  styles.input,
-                  styles.inputBorder,
-                  dynamic.inputOverride,
-                ]}
-                placeholder="Contraseña"
-                placeholderTextColor="#000"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                autoCapitalize="none"
-              />
-
-              <TouchableOpacity
-                style={[
-                  styles.inicio,
-                  dynamic.inicioOverride,
-                  (loading || !(mail.trim() && password)) && {opacity: 0.6},
-                ]}
-                onPress={() => handleLogin()}
-                disabled={loading || !(mail.trim() && password)}>
-                {loading ? (
-                  <ActivityIndicator color={PRIMARY} />
-                ) : (
-                  <Text style={[styles.buttonText, dynamic.buttonTextOverride]}>
-                    Iniciar Sesión
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </>
-          ) : null}
-
-          {/* Keep forgot password visible in full login mode (optional) */}
-          {showFullLogin && (
-            <TouchableOpacity
-              style={styles.forgotPasswordContainer}
-              onPress={() => navigation.navigate('SendEmail')}>
-              <Text style={[styles.forgotPasswordText, dynamic.forgotOverride]}>
                 ¿Se te olvidó tu contraseña?
               </Text>
             </TouchableOpacity>
+          </View>
+        ) : null}
+    */}
+        {/*MODE 3: FULL LOGIN (email + password)*/}
+
+        <TextInput
+          style={[styles.input, styles.inputBorder, dynamic.inputOverride]}
+          placeholder="Correo electrónico"
+          placeholderTextColor="#000"
+          value={mail}
+          onChangeText={setMail}
+          keyboardType="email-address"
+          autoCapitalize="none"
+        />
+
+        <TextInput
+          style={[styles.input, styles.inputBorder, dynamic.inputOverride]}
+          placeholder="Contraseña"
+          placeholderTextColor="#000"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+
+        <TouchableOpacity
+          style={[
+            styles.inicio,
+            dynamic.inicioOverride,
+            (loading || !mail.trim() || !password) && {opacity: 0.6},
+          ]}
+          onPress={handleLogin}
+          disabled={loading || !mail.trim() || !password}>
+          {loading ? (
+            <ActivityIndicator color={PRIMARY} />
+          ) : (
+            <Text style={[styles.buttonText, dynamic.buttonTextOverride]}>
+              Iniciar Sesión
+            </Text>
           )}
-        </Animated.View>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.forgotPasswordContainer}
+          onPress={() => navigation.navigate('SendEmail')}>
+          <Text style={[styles.forgotPasswordText, dynamic.forgotOverride]}>
+            ¿Se te olvidó tu contraseña?
+          </Text>
+        </TouchableOpacity>
+
         <TouchableOpacity
           style={[
             styles.termsFloatingContainer,
@@ -803,6 +839,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 18,
     fontFamily: 'Montserrat-Bold',
+
+    fontWeight: '500',
   },
   carita: {
     fontSize: 10,

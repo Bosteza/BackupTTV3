@@ -1,4 +1,4 @@
-// Home.js (recommended: stable routes + conditional render via <Stack.Screen>{(props)=>...}</Stack.Screen>)
+//Working 14 april
 import React, {useCallback, useState} from 'react';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
@@ -47,6 +47,8 @@ import Stripe from './Stripe';
 import ConfirmacionPago from './ConfirmacionPago';
 import SaleDetail from './PagoDetail';
 import ErrorPago from './ErrorPago';
+import {StackActions} from '@react-navigation/native';
+import SelectDefaultHome from './SelectDefaultHome';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -163,6 +165,7 @@ function ProfileStackScreen({isGuest}) {
       <Stack.Screen name="Restaurant" component={RestaurantDetailScreen} />
       <Stack.Screen name="SaleDetail" component={SaleDetail} />
       <Stack.Screen name="ExperiencesDetails" component={ExperiencesDetails} />
+      <Stack.Screen name="SelectDefaultHome" component={SelectDefaultHome} />
     </Stack.Navigator>
   );
 }
@@ -198,7 +201,7 @@ export default function Home() {
 
   return (
     <Tab.Navigator
-      initialRouteName="QR"
+      initialRouteName="QR" //Change this to Feed/QR if you want iPad to work
       lazy={true}
       screenOptions={({route}) => {
         // Optional: dim + “locked” label for these tabs in guest
@@ -277,6 +280,21 @@ export default function Home() {
         listeners={({navigation}) => ({
           tabPress: e => {
             e.preventDefault();
+
+            const state = navigation.getState();
+            const experiencesRoute = state.routes.find(
+              route => route.name === 'Experiences',
+            );
+
+            const nestedKey = experiencesRoute?.state?.key;
+
+            if (nestedKey) {
+              navigation.dispatch({
+                ...StackActions.popToTop(),
+                target: nestedKey,
+              });
+            }
+
             navigation.navigate('Experiences', {
               screen: 'ExperiencesMain',
             });

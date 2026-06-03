@@ -1,4 +1,4 @@
-//Good
+//token
 import React, {useEffect, useState, useMemo} from 'react';
 import {
   SafeAreaView,
@@ -21,17 +21,18 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useNavigation, useRoute} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const API_BASE_URL = 'https://api.tab-track.com';
-const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
-const formatMoney = n =>
-  Number.isFinite(n)
-    ? n.toLocaleString('es-MX', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })
-    : '0.00';
+const formatMoney = n => {
+  const value = Number(n);
+  if (!Number.isFinite(value)) return '0.00';
+
+  const [integerPart, decimalPart] = value.toFixed(2).split('.');
+  const formattedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+  return `${formattedInteger}.${decimalPart}`;
+};
 
 const round2 = v => {
   const n = Number(v || 0);
@@ -104,6 +105,9 @@ export default function Dividir() {
   const [moneda, setMoneda] = useState(route?.params?.moneda ?? 'MXN');
   const [externalTotalConsumo, setExternalTotalConsumo] = useState(
     incomingTotalConsumo ?? null,
+  );
+  const [restaurantImage, setRestaurantImage] = useState(
+    route?.params?.restaurantImage ?? null,
   );
 
   const [equalsSplitPaid, setEqualsSplitPaid] = useState(false);
@@ -282,7 +286,9 @@ export default function Dividir() {
 
       if (route.params.mesero) setMesero(route.params.mesero);
       if (route.params.moneda) setMoneda(route.params.moneda);
-
+      if (route.params.restaurantImage) {
+        setRestaurantImage(route.params.restaurantImage);
+      }
       if (
         route.params.total_consumo !== undefined &&
         route.params.total_consumo !== null
@@ -313,6 +319,7 @@ export default function Dividir() {
 
       setLoading(true);
       try {
+        await ensureToken();
         const url = `${API_BASE_URL.replace(
           /\/$/,
           '',
@@ -322,9 +329,7 @@ export default function Dividir() {
           headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
-            ...(API_AUTH_TOKEN
-              ? {Authorization: `Bearer ${API_AUTH_TOKEN}`}
-              : {}),
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
           },
         });
 
@@ -393,6 +398,7 @@ export default function Dividir() {
       consumoJson = null,
     ) => {
       try {
+        await ensureToken();
         const useSale =
           saleId ||
           (route?.params?.saleId ??
@@ -460,9 +466,7 @@ export default function Dividir() {
           headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
-            ...(API_AUTH_TOKEN
-              ? {Authorization: `Bearer ${API_AUTH_TOKEN}`}
-              : {}),
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
           },
         });
 
@@ -690,6 +694,58 @@ export default function Dividir() {
       mounted = false;
     };
   }, [saleId, route?.params]);
+  useEffect(() => {
+    let mounted = true;
+    const fetchRestaurantImage = async () => {
+      try {
+        if (route?.params?.restaurantImage) {
+          if (mounted) setRestaurantImage(route.params.restaurantImage);
+          return;
+        }
+
+        if (!restauranteId || !sucursalId) return;
+        await ensureToken();
+        const url = `${API_BASE_URL.replace(
+          /\/$/,
+          '',
+        )}/api/restaurantes/${encodeURIComponent(
+          String(restauranteId),
+        )}/sucursales`;
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
+          },
+        });
+
+        if (!res.ok) return;
+
+        const json = await res.json();
+        const sucursales = Array.isArray(json?.sucursales)
+          ? json.sucursales
+          : [];
+        const found = sucursales.find(
+          s => String(s?.id) === String(sucursalId),
+        );
+        const logoUrl = found?.imagen_logo_url ?? null;
+
+        if (mounted) {
+          setRestaurantImage(
+            logoUrl && String(logoUrl).trim() ? String(logoUrl).trim() : null,
+          );
+        }
+      } catch (err) {
+        console.warn('Error consultando imagen de sucursal', err);
+      }
+    };
+
+    fetchRestaurantImage();
+    return () => {
+      mounted = false;
+    };
+  }, [restauranteId, sucursalId, route?.params?.restaurantImage]);
 
   const toggleItem = index => {
     setItems(prev =>
@@ -777,6 +833,7 @@ export default function Dividir() {
     total_comensales: totalComensales,
     total_consumo: externalTotalConsumo ?? total,
     selected_item_ids: selectedIdsArray,
+    restaurantImage,
   });
 
   const savePendingLocal = async (saleIdLocal, idsArray = [], amount = 0) => {
@@ -833,6 +890,7 @@ export default function Dividir() {
       total: selTotal,
       people: 1,
       ...sharedHiddenFields(),
+      restaurantImage,
     });
   };
 
@@ -880,6 +938,7 @@ export default function Dividir() {
       total: pTotal,
       total_consumo: pTotal,
       total_from_dividir: pTotal,
+      restaurantImage,
     });
     return;
   };
@@ -905,7 +964,7 @@ export default function Dividir() {
         iva,
         total,
         total_comensales: totalComensales,
-        restaurantImage: null,
+        restaurantImage,
         ...sharedHiddenFields(),
       });
       return;
@@ -932,7 +991,7 @@ export default function Dividir() {
       iva: pIva,
       total: pTotal,
       total_comensales: totalComensales,
-      restaurantImage: null,
+      restaurantImage,
       ...sharedHiddenFields(),
     });
   };
@@ -1040,7 +1099,10 @@ export default function Dividir() {
       />
 
       <View style={styles.topBar}>
-        <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={handleBack}
+          hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
           <Text style={styles.backArrow}>{'‹'}</Text>
         </TouchableOpacity>
 
@@ -1094,7 +1156,11 @@ export default function Dividir() {
                   },
                 ]}>
                 <Image
-                  source={require('../../assets/images/restaurante.jpeg')}
+                  source={
+                    restaurantImage
+                      ? {uri: restaurantImage}
+                      : require('../../assets/images/restaurante.jpeg')
+                  }
                   style={[
                     styles.restaurantImage,
                     {
@@ -1605,24 +1671,6 @@ function makeStyles({
       paddingBottom: 15,
     },
 
-    // Make primary button clearly visible in single-button layout
-    modalBtnPrimary: {
-      width: '50%',
-      height: 60,
-      paddingVertical: 20,
-
-      borderRadius: 18,
-      backgroundColor: '#0046ff',
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-
-    modalBtnPrimaryText: {
-      color: '#fff',
-      fontWeight: '800',
-      fontSize: Math.round(clamp(rf(3.4), 13, 16)),
-    },
-
     modalTitle: {
       color: '#fff',
       fontSize: Math.round(clamp(rf(4.6), 16, 20)),
@@ -1639,6 +1687,23 @@ function makeStyles({
       flexDirection: 'row',
       width: '100%',
       justifyContent: 'space-between',
+    },
+    // Make primary button clearly visible in single-button layout
+    modalBtnPrimary: {
+      width: '50%',
+      height: 60,
+      paddingVertical: 20,
+
+      borderRadius: 18,
+      backgroundColor: '#0046ff',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    modalBtnPrimaryText: {
+      color: '#fff',
+      fontWeight: '800',
+      fontSize: Math.round(clamp(rf(3.4), 13, 16)),
     },
     modalBtnGhost: {
       flex: 1,

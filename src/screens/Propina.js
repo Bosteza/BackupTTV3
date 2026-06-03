@@ -95,14 +95,9 @@ export default function Propina() {
       ? String(initialPercent)
       : '';
 
-  const DEFAULT_PERCENT = 15;
-
-  const [selectedPercent, setSelectedPercent] = useState(
-    initialPercent ?? DEFAULT_PERCENT,
-  );
-
+  const [selectedPercent, setSelectedPercent] = useState(initialPercent ?? 15);
   const [otherPercent, setOtherPercent] = useState(initialOther);
-  const [customActive, setCustomActive] = useState(false);
+  const [customActive, setCustomActive] = useState(Boolean(initialOther));
 
   const [hasAppliedBefore, setHasAppliedBefore] = useState(
     Boolean(incomingTipApplied),
@@ -637,18 +632,10 @@ export default function Propina() {
                     {paddingVertical: clampLocal(Math.round(rf(12)), 8, 16)},
                   ]}
                   onPress={() => {
-                    setHasAppliedBefore(true);
-
-                    // If tapping the same percent again → turn it OFF
-                    if (!customActive && selectedPercent === p) {
-                      setSelectedPercent(null);
-                      return;
-                    }
-
-                    // Otherwise → activate this percent
                     setCustomActive(false);
                     setOtherPercent('');
                     setSelectedPercent(p);
+                    setHasAppliedBefore(true);
                   }}
                   hitSlop={{top: 8, left: 8, right: 8, bottom: 8}}>
                   <View
@@ -763,9 +750,7 @@ export default function Propina() {
           <View style={styles.divider} />
           <View style={styles.totalsRow}>
             <Text style={[styles.totLabel, {fontSize: smallFont}]}>
-              {comingFromEqualSplit && peopleCount > 1
-                ? 'Total (por persona)'
-                : 'Total'}
+              {comingFromEqualSplit && peopleCount > 1 ? 'Total' : 'Total'}
             </Text>
             <Text style={[styles.totValue, {fontSize: smallFont}]}>
               {formatMoney(effectiveTotal)} MXN

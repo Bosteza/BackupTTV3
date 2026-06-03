@@ -1,4 +1,4 @@
-//Working 9 mer
+//token
 import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   SafeAreaView,
@@ -20,12 +20,11 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const VISITS_STORAGE_KEY = 'user_visits';
 
 const API_BASE_URL = 'https://api.tab-track.com';
-const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const WHATSAPP_URL_DIRECT =
   'https://api.whatsapp.com/send?phone=5214611011391&text=%C2%A1Hola!%20Quiero%20m%C3%A1s%20informaci%C3%B3n%20de%20';
@@ -263,12 +262,12 @@ export default function DetailScreen({navigation, route}) {
         email,
       )}&desde=${day}&hasta=${day}`;
 
+      await ensureToken();
       const headers = {
         Accept: 'application/json',
         'Content-Type': 'application/json',
+        ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
       };
-      if (API_AUTH_TOKEN && API_AUTH_TOKEN.trim())
-        headers['Authorization'] = `Bearer ${API_AUTH_TOKEN}`;
 
       let res = null;
       try {
@@ -640,14 +639,13 @@ export default function DetailScreen({navigation, route}) {
       )}/api/transacciones-pago/sucursal/${encodeURIComponent(
         sucursalId,
       )}/ventas/${encodeURIComponent(saleId)}/splits`;
+      await ensureToken();
       const res = await fetch(url, {
         method: 'GET',
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          ...(API_AUTH_TOKEN
-            ? {Authorization: `Bearer ${API_AUTH_TOKEN}`}
-            : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
       });
       if (!res.ok) {
@@ -920,14 +918,13 @@ export default function DetailScreen({navigation, route}) {
       )}&sucursal_id=${encodeURIComponent(
         sucursalId,
       )}&desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(hasta)}`;
+      await ensureToken();
       const res = await fetch(url, {
         method: 'GET',
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          ...(API_AUTH_TOKEN
-            ? {Authorization: `Bearer ${API_AUTH_TOKEN}`}
-            : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
       });
       if (!res.ok) {
@@ -1106,7 +1103,6 @@ export default function DetailScreen({navigation, route}) {
 
   const handleBack = () => {
     navigation.navigate('ExperiencesMain');
-    // or navigation.replace('Welcome');
   };
 
   const handleOpenWhatsApp = async () => {
@@ -1167,13 +1163,48 @@ export default function DetailScreen({navigation, route}) {
     }
   }, [showNotifications]);
 
+  function normalizeVisitData(v) {
+    if (!v) return null;
+
+    const cleanName = x => {
+      const s = String(x ?? '').trim();
+      if (!s) return '';
+      if (s.toLowerCase() === 'restaurante') return '';
+      return s;
+    };
+
+    return {
+      ...v,
+      nombre:
+        cleanName(v.nombre) ||
+        cleanName(v.restaurantName) ||
+        cleanName(v.nombre_restaurante) ||
+        '',
+      restaurantName:
+        cleanName(v.restaurantName) ||
+        cleanName(v.nombre_restaurante) ||
+        cleanName(v.nombre) ||
+        '',
+      nombre_restaurante:
+        cleanName(v.nombre_restaurante) ||
+        cleanName(v.restaurantName) ||
+        cleanName(v.nombre) ||
+        '',
+      branchName: v.branchName ?? v.nombre_sucursal ?? '',
+      nombre_sucursal: v.nombre_sucursal ?? v.branchName ?? '',
+      restaurantImage:
+        v.restaurantImage ?? v.imagen_logo_url ?? v.logo_url ?? null,
+      bannerImage: v.bannerImage ?? v.imagen_banner_url ?? null,
+    };
+  }
   useEffect(() => {
     (async () => {
       if (route?.params?.visit) {
-        setVisit(route.params.visit);
+        const normalizedVisit = normalizeVisitData(route.params.visit);
+        setVisit(normalizedVisit);
         setLoading(false);
         try {
-          await tryFetchSplits(route.params.visit);
+          await tryFetchSplits(normalizedVisit);
         } catch (e) {
           /* noop */
         }
@@ -1363,7 +1394,7 @@ export default function DetailScreen({navigation, route}) {
             },
           ]}>
           <TouchableOpacity
-            onPress={handleBack}
+            onPress={() => navigation.goBack()}
             hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
             <Ionicons
               name="arrow-back"
@@ -1395,7 +1426,7 @@ export default function DetailScreen({navigation, route}) {
 
         <View style={{padding: Math.max(12, wp(4))}}>
           <Text>No se encontró la visita seleccionada.</Text>
-          <Button title="Volver" onPress={handleBack} />
+          <Button title="Volver" onPress={() => navigation.goBack()} />
         </View>
       </SafeAreaView>
     );
@@ -1632,7 +1663,7 @@ export default function DetailScreen({navigation, route}) {
         ]}>
         <TouchableOpacity
           style={styles.headerLeftBtn}
-          onPress={handleBack}
+          onPress={() => navigation.goBack()}
           hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
           <Ionicons
             name="arrow-back"
@@ -1700,7 +1731,10 @@ export default function DetailScreen({navigation, route}) {
           <View style={styles.totalTextWrapper}>
             <Text
               style={[styles.totalLabel, {fontSize: clamp(rf(3.2), 14, 18)}]}>
-              {visit.restaurantName ?? 'Restaurante'}
+              {visit.nombre ||
+                visit.restaurantName ||
+                visit.nombre_restaurante ||
+                'Restaurante'}
             </Text>
             <Text
               style={[

@@ -1,4 +1,4 @@
-// SplashScreen.js
+// SplashScreen.js checking true
 import React, {useEffect} from 'react';
 import {
   Image,
@@ -9,28 +9,65 @@ import {
   StatusBar,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+const DEFAULT_HOME_KEY = 'user_default_home';
 
 export default function SplashScreen({navigation}) {
   useEffect(() => {
-    const timer = setTimeout(async () => {
+    let mounted = true;
+    let timer = null;
+
+    const decideAndNavigate = async () => {
       try {
-        const active = await AsyncStorage.getItem('session_active');
-        const userId = await AsyncStorage.getItem('user_usuario_app_id');
+        // Comprobamos claves que guarda Login.js para decidir si hay sesión activa.
+        const uid = await AsyncStorage.getItem('user_usuario_app_id');
+        const valid = await AsyncStorage.getItem('user_valid');
+        const email = await AsyncStorage.getItem('user_email');
 
-        if (active === '1' && userId) {
-          navigation.replace('Home');
-        } else {
-          navigation.replace('Welcome');
+        const hasSession = !!(
+          uid ||
+          (valid && (valid === 'true' || valid === '1')) ||
+          email
+        );
+
+        let targetRoute = 'Welcome';
+
+        if (hasSession) {
+          const defaultHome = await AsyncStorage.getItem(DEFAULT_HOME_KEY);
+          const residenceRaw = await AsyncStorage.getItem(
+            'user_residence_activo',
+          );
+          const residenceActive = ['true', '1'].includes(
+            String(residenceRaw ?? '').toLowerCase(),
+          );
+
+          if (defaultHome === 'residence' && residenceActive) {
+            targetRoute = 'HomeResidence';
+          } else {
+            targetRoute = 'Home';
+          }
         }
-      } catch {
-        navigation.replace('Welcome');
-      }
-    }, 3000);
 
-    return () => clearTimeout(timer);
+        timer = setTimeout(() => {
+          if (!mounted) return;
+          navigation.replace(targetRoute);
+        }, 3000);
+      } catch (err) {
+        timer = setTimeout(() => {
+          if (!mounted) return;
+          navigation.replace('Welcome');
+        }, 3000);
+      }
+    };
+
+    decideAndNavigate();
+
+    return () => {
+      mounted = false;
+      if (timer) clearTimeout(timer);
+    };
   }, [navigation]);
 
   const {width, height} = useWindowDimensions();

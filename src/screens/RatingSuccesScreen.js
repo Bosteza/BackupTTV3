@@ -1,5 +1,5 @@
 import React, {useState, useRef, useEffect} from 'react';
-import {useNotifications} from './NotificationProvider';
+
 import {
   SafeAreaView,
   View,
@@ -60,9 +60,6 @@ export default function RatingSuccessScreen() {
     760,
   );
 
-  const [showNotifications, setShowNotifications] = useState(false);
-  const {notifications, dispatch} = useNotifications();
-
   useEffect(() => {
     // reproducir la animación al montar (si la referencia existe)
     try {
@@ -71,11 +68,6 @@ export default function RatingSuccessScreen() {
       // fallback silencioso si no se puede reproducir
     }
   }, []);
-
-  const unreadCount = notifications.filter(n => !n.read).length;
-  const markAllRead = () => {
-    dispatch({type: 'MARK_ALL_READ'});
-  };
 
   return (
     <SafeAreaView
@@ -91,7 +83,7 @@ export default function RatingSuccessScreen() {
       <StatusBar barStyle="dark-content" />
       {/* HEADER */}
 
-      <Modal visible={showNotifications} animationType="slide" transparent>
+      {/*  <Modal visible={showNotifications} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <View style={styles.modalHeader}>
@@ -123,7 +115,7 @@ export default function RatingSuccessScreen() {
             />
           </View>
         </View>
-      </Modal>
+      </Modal> */}
 
       <View
         style={[

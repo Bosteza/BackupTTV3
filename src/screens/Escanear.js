@@ -1,4 +1,4 @@
-//Working 9 mar
+//token
 import React, {useEffect, useState, useCallback, useRef, useMemo} from 'react';
 import {
   SafeAreaView,
@@ -23,23 +23,24 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const API_BASE_URL = 'https://api.tab-track.com';
-const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const VISITS_STORAGE_KEY = 'user_visits';
 const PENDING_VISITS_KEY = 'pending_visits';
 
 const PENDING_POLL_INTERVAL_MS = 8000;
 
-const formatMoney = (n, currency = 'MXN') =>
-  Number.isFinite(n)
-    ? `${n.toLocaleString('es-MX', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`
-    : '0.00';
+const formatMoney = n => {
+  const value = Number(n);
+  if (!Number.isFinite(value)) return '0.00';
+
+  const [integerPart, decimalPart] = value.toFixed(2).split('.');
+  const formattedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+  return `${formattedInteger}.${decimalPart}`;
+};
 
 const safeNum = v => {
   const n = Number(v);
@@ -278,7 +279,7 @@ export default function Escanear() {
   }, []);
 
   const [discountAmount, setDiscountAmount] = useState(0);
-  const [discountPercentLabel, setDiscountPercentLabel] = useState(null); // e.g. "7%" or "7% + 3%"
+  const [discountPercentLabel, setDiscountPercentLabel] = useState(null);
 
   const checkPendingPromotions = useCallback(async (log = false) => {
     try {
@@ -308,14 +309,13 @@ export default function Escanear() {
             String(suc),
           )}/ventas/${encodeURIComponent(String(sale))}/splits`;
           try {
+            await ensureToken();
             const sr = await fetch(splitsBySaleUrl, {
               method: 'GET',
               headers: {
                 Accept: 'application/json',
                 'Content-Type': 'application/json',
-                Authorization: API_AUTH_TOKEN
-                  ? `Bearer ${API_AUTH_TOKEN}`
-                  : undefined,
+                ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
               },
             });
             if (!sr || !sr.ok) {
@@ -430,6 +430,33 @@ export default function Escanear() {
       };
     }
   };
+  const fetchSucursalLogo = useCallback(async (restId, sucId) => {
+    try {
+      if (!restId || !sucId) return null;
+      const url = `${API_BASE_URL.replace(
+        /\/$/,
+        '',
+      )}/api/restaurantes/${encodeURIComponent(String(restId))}/sucursales`;
+      await ensureToken();
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
+        },
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      const sucursales = Array.isArray(json?.sucursales) ? json.sucursales : [];
+      const found = sucursales.find(s => String(s?.id) === String(sucId));
+      const logo = found?.imagen_logo_url ?? null;
+      return logo && String(logo).trim() ? String(logo).trim() : null;
+    } catch (e) {
+      console.warn('fetchSucursalLogo error', e);
+      return null;
+    }
+  }, []);
 
   const fetchConsumo = useCallback(
     async (opts = {showLoading: true}) => {
@@ -445,14 +472,13 @@ export default function Escanear() {
           /\/$/,
           '',
         )}/api/mesas/r/${encodeURIComponent(token)}`;
+        await ensureToken();
         const res = await fetch(url, {
           method: 'GET',
           headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
-            Authorization: API_AUTH_TOKEN
-              ? `Bearer ${API_AUTH_TOKEN}`
-              : undefined,
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
           },
         });
         if (!isMountedRef.current) return;
@@ -463,13 +489,16 @@ export default function Escanear() {
         }
 
         const json = await res.json();
+        const nextRestauranteId =
+          json.restaurante_id ?? json.restaurante ?? null;
+        const nextSucursalId = json.sucursal_id ?? json.sucursal ?? null;
 
         if (isMountedRef.current) {
           setMesaId(json.mesa_id ?? json.mesa ?? null);
           setMesero(json.mesero ?? json.cajero ?? null);
           setMoneda(json.moneda ?? 'MXN');
-          setRestauranteId(json.restaurante_id ?? json.restaurante ?? null);
-          setSucursalId(json.sucursal_id ?? json.sucursal ?? null);
+          setRestauranteId(nextRestauranteId);
+          setSucursalId(nextSucursalId);
           setSaleId(json.sale_id ?? json.venta_id ?? json.id ?? null);
           setTotalComensales(safeNum(json.total_comensales ?? 0));
           setFechaApertura(json.fecha_apertura ?? null);
@@ -489,7 +518,24 @@ export default function Escanear() {
 
         const rawItems = Array.isArray(json.items) ? json.items : [];
 
-        // --- NUEVA LÓGICA: detectar si precio_item es precio UNITARIO o TOTAL DE LÍNEA ---
+        if (nextRestauranteId && nextSucursalId) {
+          try {
+            const logoUrl = await fetchSucursalLogo(
+              nextRestauranteId,
+              nextSucursalId,
+            );
+            if (isMountedRef.current) {
+              if (logoUrl) {
+                setRestaurantImageUri(logoUrl);
+              } else if (!possibleImage) {
+                setRestaurantImageUri(null);
+              }
+            }
+          } catch (e) {
+            if (isMountedRef.current && !possibleImage)
+              setRestaurantImageUri(null);
+          }
+        }
         const reportedTotalFromJson = safeNum(
           json.total_consumo ??
             json.total ??
@@ -725,14 +771,13 @@ export default function Escanear() {
                 '',
               )}/api/transacciones-pago/${encodeURIComponent(tx)}/splits`;
               try {
+                await ensureToken();
                 const splitsRes = await fetch(splitsUrl, {
                   method: 'GET',
                   headers: {
                     Accept: 'application/json',
                     'Content-Type': 'application/json',
-                    Authorization: API_AUTH_TOKEN
-                      ? `Bearer ${API_AUTH_TOKEN}`
-                      : undefined,
+                    ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
                   },
                 });
                 if (splitsRes && splitsRes.ok) {
@@ -886,14 +931,13 @@ export default function Escanear() {
               )}/api/transacciones-pago/sucursal/${encodeURIComponent(
                 String(suc),
               )}/ventas/${encodeURIComponent(String(sale))}/splits`;
+              await ensureToken();
               const sr = await fetch(splitsBySaleUrl, {
                 method: 'GET',
                 headers: {
                   Accept: 'application/json',
                   'Content-Type': 'application/json',
-                  Authorization: API_AUTH_TOKEN
-                    ? `Bearer ${API_AUTH_TOKEN}`
-                    : undefined,
+                  ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
                 },
               });
               if (sr && sr.ok) {
@@ -1046,7 +1090,7 @@ export default function Escanear() {
         if (isMountedRef.current) setLoading(false);
       }
     },
-    [token],
+    [token, fetchSucursalLogo],
   );
 
   useEffect(() => {
@@ -1097,10 +1141,9 @@ export default function Escanear() {
   const subtotalValueFont = clamp(rf(3.8), 16, 22);
   const primaryBtnPadding = Math.max(12, hp(1.6));
 
-  // botones deshabilitados (para feedback visual)
-  const primaryDisabled = consumoPaid || equalsSplitPaid; // Pago en una sola: bloquear si consumoPaid o equal paid
+  const primaryDisabled = consumoPaid || equalsSplitPaid;
   const pagarConsumoDisabled =
-    equalsSplitPaid || Number(discountAmount || 0) > 0; // Pagar por consumo: bloquear si equal paid
+    equalsSplitPaid || Number(discountAmount || 0) > 0;
   const equalSplitDisabled = consumoPaid; // Pago por partes iguales: bloquear si consumoPaid
 
   return (
@@ -1648,6 +1691,7 @@ export default function Escanear() {
                 restaurante_id: restauranteId ?? null,
                 saleId: saleId ?? null,
                 hideEqualButton: true,
+                restaurantImage: restaurantImageUri ?? null,
               };
               try {
                 const pending = {
@@ -1736,6 +1780,7 @@ export default function Escanear() {
                 mesa_id: mesaId ?? null,
                 restaurante_id: restauranteId ?? null,
                 saleId: saleId ?? null,
+                restaurantImage: restaurantImageUri ?? null,
               };
               try {
                 const pending = {
@@ -1812,7 +1857,7 @@ export default function Escanear() {
       {styledAlertVisible && (
         <View style={styles.modalBackdrop}>
           <LinearGradient
-            colors={['#9F4CFF', '#6A43FF', '#2C7DFF']}
+            colors={['#FF2FA0', '#6B2CFF', '#0046ff']}
             style={[styles.gatewayModalBox, {width: '100%'}]}>
             <Ionicons
               name="alert-circle"

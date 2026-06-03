@@ -1,7 +1,12 @@
 // App.tsx
-/*import React from 'react';
+import React, {useEffect} from 'react';
+import {AppState} from 'react-native';
 import {NavigationContainer} from '@react-navigation/native';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
+import {initOneSignal} from './src/services/oneSignalService';
+
+// Token manager
+import {ensureToken} from './src/auth/tokenManager';
 
 // Pantallas sin barra (Auth)
 import SplashScreen from './src/screens/SplashScreen';
@@ -16,92 +21,79 @@ import ForgotPassword from './src/screens/ForgotPassword';
 import Home from './src/screens/Home';
 import TermsAndConditions from './src/screens/TermsAndConditions';
 import VerificationScreen from './src/screens/VerificacionScreen';
-
-import RestaurantsScreen from './src/screens/Feed';
-import RestaurantScreen from './src/screens/RestaurantDetailScreen';
-import FavoritesScreen from './src/screens/FavoritesScreen';
-
-const Stack = createNativeStackNavigator();
-
-export default function App() {
-  return (
-    <NavigationContainer>
-      <Stack.Navigator
-        screenOptions={{headerShown: false}}
-        initialRouteName="Home" // 👈 ahora arrancamos en Home
-      >
-        {/* Paso 1: Home vuelve a ser la pantalla inicial }
-        <Stack.Screen name="Home" component={Home} />
-
-        {/* Tus pantallas que ya funcionan }
-        <Stack.Screen name="Restaurants" component={RestaurantsScreen} />
-        <Stack.Screen name="Restaurant" component={RestaurantScreen} />
-        <Stack.Screen name="Favorites" component={FavoritesScreen} />
-      </Stack.Navigator>
-    </NavigationContainer>
-  );
-} 
-*/ // App.tsx
-import React from 'react';
-import {NavigationContainer} from '@react-navigation/native';
-import {createNativeStackNavigator} from '@react-navigation/native-stack';
-
-import {NotificationProvider} from './src/screens/NotificationProvider';
-
-// Pantallas sin barra (Auth)
-import SplashScreen from './src/screens/SplashScreen';
-import WelcomeScreen from './src/screens/WelcomeScreen';
-import CreateAccount from './src/screens/CreateAccount';
-import Login from './src/screens/Login';
-import Cuenta from './src/screens/Cuenta';
-import Loading from './src/screens/Loading';
-import ForgotPassword from './src/screens/ForgotPassword';
-
-// Pantalla principal con tabs
-import Home from './src/screens/Home';
-import TermsAndConditions from './src/screens/TermsAndConditions';
-import VerificationScreen from './src/screens/VerificacionScreen';
-import SendEmail from './src/screens/SendEmail';
-import ResetPassword from './src/screens/ResetPassword';
-import OpenPay from './src/screens/OpenPay';
-import {StripeProvider} from '@stripe/stripe-react-native';
-
-//Residence
 import CodeResidence from './src/screensRes/CodeResidence';
 import HomeResidence from './src/screensRes/HomeResidence';
 import SplashResidence from './src/screensRes/SplashResidence';
+import SendEmail from './src/screens/SendEmail';
+import ResetPassword from './src/screens/ResetPassword';
+import RecentAccounts from './src/screens/RecentAccount';
+import QuickLogin from './src/screens/QuickLogin';
+import SelectDefaultHome from './src/screens/SelectDefaultHome';
+
+//Residence
 
 const Stack = createNativeStackNavigator();
+const linking = {
+  prefixes: ['tabtrack://'],
+  config: {
+    screens: {
+      Home: 'home',
+    },
+  },
+};
 
 export default function App() {
+  useEffect(() => {
+    const validateToken = async () => {
+      try {
+        await ensureToken();
+      } catch (error) {
+        console.log('Error asegurando token:', error);
+      }
+    };
+
+    // Inicializa OneSignal y pide permiso de notificaciones remotas
+    initOneSignal();
+
+    // Al abrir la app
+    validateToken();
+
+    // Cuando la app regresa al frente
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        validateToken();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
   return (
-    <NotificationProvider>
-      <NavigationContainer>
-        <Stack.Navigator
-          screenOptions={{headerShown: false, gestureEnabled: false}}>
-          {/* Auth screens (sin barra) */}
-          <Stack.Screen name="Splash" component={SplashScreen} />
-          <Stack.Screen name="Welcome" component={WelcomeScreen} />
-          <Stack.Screen name="CreateAccount" component={CreateAccount} />
-          <Stack.Screen name="Login" component={Login} />
-          <Stack.Screen name="Cuenta" component={Cuenta} />
-          <Stack.Screen name="Loading" component={Loading} />
-          <Stack.Screen name="ForgotPassword" component={ForgotPassword} />
-          <Stack.Screen name="Terms" component={TermsAndConditions} />
-          <Stack.Screen name="Verificacion" component={VerificationScreen} />
-          <Stack.Screen name="SendEmail" component={SendEmail} />
-          <Stack.Screen name="ResetPassword" component={ResetPassword} />
+    <NavigationContainer linking={linking}>
+      <Stack.Navigator
+        screenOptions={{headerShown: false, gestureEnabled: false}}>
+        <Stack.Screen name="Splash" component={SplashScreen} />
+        <Stack.Screen name="Welcome" component={WelcomeScreen} />
+        <Stack.Screen name="CreateAccount" component={CreateAccount} />
+        <Stack.Screen name="Login" component={Login} />
+        <Stack.Screen name="Cuenta" component={Cuenta} />
+        <Stack.Screen name="Loading" component={Loading} />
+        <Stack.Screen name="ForgotPassword" component={ForgotPassword} />
+        <Stack.Screen name="Terms" component={TermsAndConditions} />
+        <Stack.Screen name="Verificacion" component={VerificationScreen} />
+        <Stack.Screen name="SendEmail" component={SendEmail} />
+        <Stack.Screen name="ResetPassword" component={ResetPassword} />
+        <Stack.Screen name="Recent" component={RecentAccounts} />
+        <Stack.Screen name="QuickLogin" component={QuickLogin} />
+        <Stack.Screen name="SelectDefaultHome" component={SelectDefaultHome} />
 
-          {/* Auth screens Residence */}
+        <Stack.Screen name="CodeResidence" component={CodeResidence} />
+        <Stack.Screen name="SplashResidence" component={SplashResidence} />
 
-          <Stack.Screen name="CodeResidence" component={CodeResidence} />
-          <Stack.Screen name="SplashResidence" component={SplashResidence} />
-
-          {/* Main app con barra */}
-          <Stack.Screen name="Home" component={Home} />
-          <Stack.Screen name="HomeResidence" component={HomeResidence} />
-        </Stack.Navigator>
-      </NavigationContainer>
-    </NotificationProvider>
+        <Stack.Screen name="Home" component={Home} />
+        <Stack.Screen name="HomeResidence" component={HomeResidence} />
+      </Stack.Navigator>
+    </NavigationContainer>
   );
 }

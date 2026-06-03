@@ -1,4 +1,4 @@
-//9 marz
+//token
 import React, {useState, useRef, useEffect} from 'react';
 import {
   SafeAreaView,
@@ -21,10 +21,9 @@ import {useNavigation} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const DEFAULT_API_BASE = 'https://api.residence.tab-track.com';
-const DEFAULT_API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78'; // pon tu token fijo aquí si aplica
 
 export default function CodeResidence(props) {
   const navigation = useNavigation();
@@ -102,14 +101,13 @@ export default function CodeResidence(props) {
   };
 
   const getApiConfig = async () => {
-    return {
-      host: String(DEFAULT_API_BASE).replace(/\/$/, ''),
-      token: String(DEFAULT_API_TOKEN),
-    };
+    return {host: String(DEFAULT_API_BASE).replace(/\/$/, '')};
   };
 
   const callActivateApi = async (mail, tokenToSend) => {
-    const {host, token: apiTokenFromConfig} = await getApiConfig();
+    await ensureToken();
+
+    const {host} = await getApiConfig();
     let base = (host || DEFAULT_API_BASE).replace(/\/$/, '');
     let endpoint = '';
     if (base.match(/\/api\/mobileapp$/i)) {
@@ -125,10 +123,8 @@ export default function CodeResidence(props) {
     const headers = {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
     };
-    if (apiTokenFromConfig && apiTokenFromConfig.length > 0) {
-      headers.Authorization = `Bearer ${apiTokenFromConfig}`;
-    }
 
     const body = {mail: mail || '', token: tokenToSend || ''};
 

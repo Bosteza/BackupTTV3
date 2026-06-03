@@ -1,4 +1,4 @@
-//good
+//token
 import React, {useState, useEffect, useRef} from 'react';
 
 import {
@@ -21,10 +21,9 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import LinearGradient from 'react-native-linear-gradient';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const API_BASE_URL = 'https://api.tab-track.com';
-const API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 export default function OpinionScreen({navigation, route}) {
   const {width, height} = useWindowDimensions();
@@ -119,6 +118,7 @@ export default function OpinionScreen({navigation, route}) {
       }
       setLoadingSurveys(true);
       try {
+        await ensureToken();
         const url = `${API_BASE_URL.replace(
           /\/$/,
           '',
@@ -130,7 +130,7 @@ export default function OpinionScreen({navigation, route}) {
           headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
-            ...(API_TOKEN ? {Authorization: `Bearer ${API_TOKEN}`} : {}),
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
           },
         });
         if (!res.ok) {
@@ -190,6 +190,7 @@ export default function OpinionScreen({navigation, route}) {
                 encuesta?.id ?? encuesta?.encuesta_id ?? encuesta?.uuid ?? null;
               if (!encuestaId) continue;
 
+              await ensureToken();
               const repUrl = `${API_BASE_URL.replace(
                 /\/$/,
                 '',
@@ -200,16 +201,13 @@ export default function OpinionScreen({navigation, route}) {
               )}&sale_id=${encodeURIComponent(
                 saleId,
               )}&sucursal_id=${encodeURIComponent(sucursalId)}`;
-
               try {
                 const repRes = await fetch(repUrl, {
                   method: 'GET',
                   headers: {
                     Accept: 'application/json',
                     'Content-Type': 'application/json',
-                    ...(API_TOKEN
-                      ? {Authorization: `Bearer ${API_TOKEN}`}
-                      : {}),
+                    ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
                   },
                 });
 
@@ -478,6 +476,7 @@ export default function OpinionScreen({navigation, route}) {
           respuestas,
         };
 
+        await ensureToken();
         const url = `${API_BASE_URL.replace(
           /\/$/,
           '',
@@ -488,7 +487,7 @@ export default function OpinionScreen({navigation, route}) {
             headers: {
               Accept: 'application/json',
               'Content-Type': 'application/json',
-              ...(API_TOKEN ? {Authorization: `Bearer ${API_TOKEN}`} : {}),
+              ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
             },
             body: JSON.stringify(payload),
           });

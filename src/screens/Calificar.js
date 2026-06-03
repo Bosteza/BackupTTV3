@@ -1,6 +1,5 @@
 //Working
 import React, {useState} from 'react';
-import {useNotifications} from './NotificationProvider';
 
 import {
   SafeAreaView,
@@ -33,14 +32,6 @@ export default function CalificarScreen({navigation}) {
   const LEFT_COL = Math.round(clamp(wp(18), 56, 120));
   const SLIDE_HEIGHT = Math.round(clamp(hp(14), 80, 140));
 
-  const [showNotifications, setShowNotifications] = useState(false);
-  const {notifications, dispatch} = useNotifications();
-
-  const unreadCount = notifications.filter(n => !n.read).length;
-  const markAllRead = () => {
-    dispatch({type: 'MARK_ALL_READ'});
-  };
-
   const questions = [
     '¿Qué te parecio la calidad de los alimentos?',
     '¿Qué te parecio la calidad del servicio?',
@@ -72,7 +63,7 @@ export default function CalificarScreen({navigation}) {
       <StatusBar barStyle="dark-content" />
 
       {/* Modal de Notificaciones */}
-      <Modal visible={showNotifications} transparent animationType="slide">
+      {/*}   <Modal visible={showNotifications} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <View style={styles.modalHeader}>
@@ -106,7 +97,7 @@ export default function CalificarScreen({navigation}) {
             </View>
           </View>
         </View>
-      </Modal>
+      </Modal> */}
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -126,7 +117,7 @@ export default function CalificarScreen({navigation}) {
             source={require('../../assets/images/logo.png')}
             style={styles.logo}
           /> */}
-          <TouchableOpacity
+          {/*     <TouchableOpacity
             onPress={() => setShowNotifications(true)}
             style={styles.notificationButton}>
             <Ionicons
@@ -139,7 +130,7 @@ export default function CalificarScreen({navigation}) {
                 <Text style={styles.badgeText}>{unreadCount}</Text>
               </View>
             )}
-          </TouchableOpacity>
+          </TouchableOpacity> */}
         </View>
       </View>
 

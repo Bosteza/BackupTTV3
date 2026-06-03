@@ -1,4 +1,4 @@
-//Actualización 9 marz
+//token
 import React, {useEffect, useState, useRef, useCallback} from 'react';
 
 import {
@@ -27,6 +27,7 @@ import {useFocusEffect, useNavigation} from '@react-navigation/native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import {PlatformColor, useColorScheme} from 'react-native';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 function useResponsive() {
   const {width, height} = useWindowDimensions();
@@ -53,8 +54,6 @@ const CARD_SLIDE_HEIGHT = 100;
 const BLUE = '#0046ff';
 
 const API_BASE_URL = 'https://api.tab-track.com';
-const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 function safeJsonParse(raw, fallback = null) {
   if (!raw) return fallback;
@@ -80,8 +79,7 @@ function getAuthHeaders(extra = {}) {
     'Content-Type': 'application/json',
     ...extra,
   };
-  if (API_AUTH_TOKEN && API_AUTH_TOKEN.trim())
-    base.Authorization = `Bearer ${API_AUTH_TOKEN}`;
+  if (TOKEN && TOKEN.trim()) base.Authorization = `Bearer ${TOKEN}`;
   return base;
 }
 
@@ -215,6 +213,56 @@ export default function VisitsScreen(props) {
     setShowScrollDown(!nearBottom);
   }, []);
 
+  /*const formatDateYMD = d => {
+    // If the API did not send a date, return an empty string
+    if (!d) return '';
+
+    // Parse naive timestamps like:
+    // "2026-04-01T20:37:55"
+    // "2026-04-01 20:37:55"
+    // We extract year, month, day, hour, minute, and optional seconds
+    const m = String(d).match(
+      /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/,
+    );
+
+    // If the value does not match the expected format, return empty
+    if (!m) return '';
+
+    const [, yyyy, mm, dd, hh, min, ss = '00'] = m;
+
+    // IMPORTANT:
+    // The backend is sending timestamps without timezone info.
+    // We are interpreting those values as UTC, not as device-local time.
+    //
+    // Example:
+    // "2026-04-01T20:37:55"
+    // is treated as:
+    // "2026-04-01 20:37:55 UTC"
+    //
+    // Then JavaScript converts that exact instant to the device local timezone
+    // when we later use getDate(), getHours(), getMinutes(), etc.
+    const dt = new Date(
+      Date.UTC(
+        Number(yyyy),
+        Number(mm) - 1, // JS months are 0-based: January = 0
+        Number(dd),
+        Number(hh),
+        Number(min),
+        Number(ss),
+      ),
+    );
+
+    // Safety check in case the constructed date is invalid
+    if (isNaN(dt.getTime())) return '';
+
+    // Format the date in the device's local timezone as:
+    // dd/mm/yy hh:mm
+    const outDD = String(dt.getDate()).padStart(2, '0');
+    const outMM = String(dt.getMonth() + 1).padStart(2, '0');
+    const outYY = String(dt.getFullYear()).slice(-2);
+
+    return `${outYY}/${outDD}/${outMM}/`;*/
+
   const formatDateYMD = d => {
     if (!d) return '';
     const dt = d instanceof Date ? d : new Date(d);
@@ -320,6 +368,7 @@ export default function VisitsScreen(props) {
         email,
       )}&desde=${day}&hasta=${day}`;
 
+      await ensureToken();
       const headers = getAuthHeaders();
       let res = null;
       try {
@@ -665,6 +714,7 @@ export default function VisitsScreen(props) {
       )}/api/mobileapp/usuarios?mail=${encodeURIComponent(
         email,
       )}&presign_ttl=30`;
+      await ensureToken();
       const headers = getAuthHeaders();
       let res;
       try {
@@ -731,6 +781,7 @@ export default function VisitsScreen(props) {
     }
 
     try {
+      await ensureToken();
       const url = `${API_BASE_URL.replace(
         /\/$/,
         '',
@@ -776,6 +827,7 @@ export default function VisitsScreen(props) {
     if (!forceNetwork && restaurantsMemRef.current[key])
       return restaurantsMemRef.current[key];
     try {
+      await ensureToken();
       const url = `${API_BASE_URL.replace(
         /\/$/,
         '',
@@ -903,6 +955,7 @@ export default function VisitsScreen(props) {
       )}&light=1`;
       let resVentas;
       try {
+        await ensureToken();
         resVentas = await fetch(urlVentas, {
           method: 'GET',
           headers: getAuthHeaders(),
@@ -940,6 +993,7 @@ export default function VisitsScreen(props) {
         )}&hasta=${encodeURIComponent(hastaStr)}&light=1`;
 
         try {
+          await ensureToken();
           const resLast30 = await fetch(last30Url, {
             method: 'GET',
             headers: getAuthHeaders(),
@@ -984,6 +1038,7 @@ export default function VisitsScreen(props) {
           )}&desde=${encodeURIComponent(desdeStr)}&hasta=${encodeURIComponent(
             hastaStr,
           )}`;
+          await ensureToken();
           const resDetalle = await fetch(urlDetalle, {
             method: 'GET',
             headers: getAuthHeaders(),
@@ -1001,9 +1056,38 @@ export default function VisitsScreen(props) {
 
           const upsertVisit = async saleEntry => {
             const computedTotal = computeSaleTotal(saleEntry);
-            const fechaCierreRaw =
-              saleEntry?.fecha_cierre_venta ?? new Date().toISOString();
-            const fechaCierre = fechaCierreRaw;
+            //No borrar
+            const pagosForDate = Array.isArray(saleEntry?.pagos)
+              ? saleEntry.pagos
+              : Array.isArray(jsonDet?.pagos)
+              ? jsonDet.pagos
+              : [];
+
+            const itemsForDate = Array.isArray(saleEntry?.items_consumidos)
+              ? saleEntry.items_consumidos
+              : Array.isArray(saleEntry?.items)
+              ? saleEntry.items
+              : [];
+
+            const firstPaidPago = pagosForDate.find(p => {
+              const status = String(p?.status ?? p?.estado ?? '').toLowerCase();
+              return status === 'confirmed' || status === 'paid';
+            });
+
+            const firstPaidItem = itemsForDate.find(it => {
+              const state = String(it?.estado ?? '').toLowerCase();
+              return state === 'confirmed' || state === 'paid';
+            });
+
+            const fechaCierre =
+              firstPaidPago?.fecha_pago ??
+              firstPaidPago?.fecha_creacion ??
+              firstPaidItem?.fecha_pago ??
+              firstPaidItem?.fecha_creacion ??
+              saleEntry?.fecha_pago ??
+              saleEntry?.fecha_creacion ??
+              saleEntry?.fecha_cierre_venta ??
+              null;
             const key = `${rootVentaId}_${rootSucursalId}`;
             const candidate = {
               id: `${rootVentaId}_${rootSucursalId}`,
@@ -1320,6 +1404,7 @@ export default function VisitsScreen(props) {
     }
 
     try {
+      await ensureToken();
       const base = API_BASE_URL.replace(/\/$/, '');
       const url = `${base}/api/encuestas/${SURVEY_FIXED_ID}/reportes?sucursal_id=${encodeURIComponent(
         String(sucursalId),

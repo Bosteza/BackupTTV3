@@ -1,4 +1,4 @@
-//Good WORKINGGGGGGG
+//token
 import React, {useState, useRef, useEffect} from 'react';
 import {
   View,
@@ -19,10 +19,10 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useNavigation, useRoute} from '@react-navigation/native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {Keyboard} from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const API_BASE = 'https://api.tab-track.com/api/mobileapp';
-const API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const BLUE = '#0046ff';
 
@@ -129,6 +129,17 @@ export default function ResetPasswordCodeScreen() {
   const validatePassword = p => {
     return typeof p === 'string' && p.length >= 6;
   };
+  const getStoredToken = async () => {
+    try {
+      await ensureToken();
+      const token =
+        typeof TOKEN === 'string' && TOKEN.trim() ? TOKEN.trim() : '';
+      return token;
+    } catch (err) {
+      console.warn('ResetPasswordCodeScreen token error:', err);
+      return '';
+    }
+  };
 
   const handleUpdate = async () => {
     Keyboard.dismiss();
@@ -155,12 +166,13 @@ export default function ResetPasswordCodeScreen() {
 
     setLoading(true);
     try {
+      const token = await getStoredToken();
       const url = `${API_BASE}/usuarios/reset-password`;
       const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(API_TOKEN ? {Authorization: `Bearer ${API_TOKEN}`} : {}),
+          ...(token ? {Authorization: `Bearer ${token}`} : {}),
         },
         body: JSON.stringify({
           mail: mail.trim(),

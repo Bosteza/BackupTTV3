@@ -1,4 +1,4 @@
-//Seems fine 7 April
+//tok
 import React, {useEffect, useState} from 'react';
 import {
   SafeAreaView,
@@ -19,10 +19,10 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useRoute, useNavigation} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import {TOKEN, ensureToken} from '../auth/tokenManager';
+
 const BASE = 'https://api.residence.tab-track.com';
 const BASE2 = 'https://api.tab-track.com';
-const TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const AVATAR_GRADIENTS = [
   ['#8E5CFF', '#5B8BFF'],
@@ -66,6 +66,7 @@ export default function MiembrosResidence() {
         if (email) {
           const profileCached = await AsyncStorage.getItem('user_profile_url');
           const raw = await AsyncStorage.getItem('recent_accounts_v1');
+          const fullnameCached = await AsyncStorage.getItem('user_fullname'); // ADD
           let arr = raw ? JSON.parse(raw) : [];
           arr = Array.isArray(arr)
             ? arr.filter(
@@ -77,6 +78,8 @@ export default function MiembrosResidence() {
             email,
             avatarUrl: profileCached || null,
             savedAt: Date.now(),
+            //  email,
+            //fullname: fullnameCached || '', // ADD
           });
           if (!Array.isArray(arr)) arr = [];
           if (arr.length > 6) arr = arr.slice(0, 6);
@@ -190,6 +193,7 @@ export default function MiembrosResidence() {
   const handleUnlink = async () => {
     try {
       setUnlinking(true);
+      await ensureToken();
 
       const id_admin_raw = await AsyncStorage.getItem('user_admin_id_actual');
       const id_edificio_raw = await AsyncStorage.getItem(
@@ -271,6 +275,7 @@ export default function MiembrosResidence() {
           }
           return;
         }
+        await ensureToken();
         if (!TOKEN || TOKEN.length === 0) {
           console.warn(
             'MiembrosResidence: TOKEN no está configurado o está vacío. Pon tu token en la constante TOKEN si es necesario.',

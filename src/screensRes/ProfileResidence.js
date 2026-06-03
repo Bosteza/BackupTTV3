@@ -1,4 +1,4 @@
-//Works 1 April
+//Works 24 April
 import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   ScrollView,
@@ -24,13 +24,12 @@ import {launchImageLibrary} from 'react-native-image-picker';
 import LinearGradient from 'react-native-linear-gradient';
 import {useFocusEffect} from '@react-navigation/native';
 import {CommonActions} from '@react-navigation/native';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const staticWidth = Dimensions.get('window').width;
 
 const API_URL = 'https://api.tab-track.com';
 const API_URL_2 = 'https://api.residence.tab-track.com';
-const TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 export default function ProfileResidence({navigation}) {
   const [showNotifications, setShowNotifications] = useState(false);
@@ -302,6 +301,7 @@ export default function ProfileResidence({navigation}) {
       }
 
       await ensureSeenMarkersLoaded(deptId);
+      await ensureToken();
 
       const now = new Date();
       const year = now.getFullYear();
@@ -636,7 +636,7 @@ export default function ProfileResidence({navigation}) {
         if (email) {
           const profileCached = await AsyncStorage.getItem('user_profile_url');
           const raw = await AsyncStorage.getItem('recent_accounts_v1');
-          const fullnameCached = await AsyncStorage.getItem('user_fullname'); // ADD
+          // const fullnameCached = await AsyncStorage.getItem('user_fullname'); // ADD
           let arr = raw ? JSON.parse(raw) : [];
           arr = Array.isArray(arr)
             ? arr.filter(
@@ -648,8 +648,8 @@ export default function ProfileResidence({navigation}) {
             email,
             avatarUrl: profileCached || null,
             savedAt: Date.now(),
-            email,
-            fullname: fullnameCached || '', // ADD
+            //     email,
+            //   fullname: fullnameCached || '', // ADD
           });
           if (!Array.isArray(arr)) arr = [];
           if (arr.length > 6) arr = arr.slice(0, 6);
@@ -714,6 +714,7 @@ export default function ProfileResidence({navigation}) {
           'user_valid',
           'user_fullname',
           'user_profile_url',
+          'user_default_home',
         ]);
       } catch (e) {
         console.warn('Error removing persistent auth keys on logout', e);
@@ -734,7 +735,7 @@ export default function ProfileResidence({navigation}) {
       try {
         navigation.reset({
           index: 0,
-          routes: [{name: 'Login'}],
+          routes: [{name: 'Recent'}],
         });
       } catch (e) {
         console.warn(
@@ -778,6 +779,7 @@ export default function ProfileResidence({navigation}) {
   const loadProfileFromApi = async () => {
     try {
       setProfileLoading(true);
+      await ensureToken();
       const email = await AsyncStorage.getItem('user_email');
       if (!email) {
         setProfileLoading(false);
@@ -866,6 +868,7 @@ export default function ProfileResidence({navigation}) {
   const uploadProfilePhoto = async asset => {
     try {
       setUploading(true);
+      await ensureToken();
       const uid = await AsyncStorage.getItem('user_usuario_app_id');
       if (!uid) {
         Toast.show('No se encontró usuario', {duration: Toast.durations.SHORT});
@@ -993,6 +996,7 @@ export default function ProfileResidence({navigation}) {
   const removeProfilePhoto = async () => {
     try {
       setUploading(true);
+      await ensureToken();
 
       const uid = await AsyncStorage.getItem('user_usuario_app_id');
       if (!uid) {
@@ -1531,6 +1535,12 @@ export default function ProfileResidence({navigation}) {
             icon="refresh-circle-outline"
             label="Actualizar contraseña"
             onPress={() => navigation.navigate('ChangePassword')}
+            optionFont={optionFont}
+          />
+          <Option
+            icon="home-outline"
+            label="Seleccionar home"
+            onPress={() => navigation.navigate('SelectDefaultHome')}
             optionFont={optionFont}
           />
           <Option

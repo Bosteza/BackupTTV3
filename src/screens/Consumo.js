@@ -1,4 +1,4 @@
-//Workin 9 mar
+//token implementation
 import React, {useEffect, useMemo, useState} from 'react';
 import {
   SafeAreaView,
@@ -17,17 +17,17 @@ import {
 import LinearGradient from 'react-native-linear-gradient';
 import {useNavigation, useRoute} from '@react-navigation/native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 const API_BASE_URL = 'https://api.tab-track.com';
-const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
-const formatMoney = n =>
-  Number.isFinite(n)
-    ? n.toLocaleString('es-MX', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })
-    : '0.00';
+const formatMoney = n => {
+  const value = Number(n);
+  if (!Number.isFinite(value)) return '0.00';
+
+  const [integerPart, decimalPart] = value.toFixed(2).split('.');
+  const formattedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+  return `${formattedInteger}.${decimalPart}`;
+};
 
 const totalFontSizeFor = str => {
   const len = String(str).length;
@@ -112,6 +112,11 @@ export default function Consumo() {
     let mounted = true;
     const fetchIfNeeded = async () => {
       if (items && Array.isArray(items)) return;
+      try {
+        await ensureToken();
+      } catch (e) {
+        console.warn('No se pudo asegurar token:', e);
+      }
       if (!token) {
         openError(
           'Error',
@@ -130,9 +135,7 @@ export default function Consumo() {
           headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
-            ...(API_AUTH_TOKEN
-              ? {Authorization: `Bearer ${API_AUTH_TOKEN}`}
-              : {}),
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
           },
         });
         if (!mounted) return;
@@ -222,6 +225,7 @@ export default function Consumo() {
   const mesaId = route?.params?.mesaId ?? route?.params?.mesa_id ?? null;
   const mesero = route?.params?.mesero ?? null;
   const moneda = route?.params?.moneda ?? 'MXN';
+  const restaurantImage = route?.params?.restaurantImage ?? null;
 
   const payloadCommon = {token, items, subtotal, iva, total};
 
@@ -237,6 +241,7 @@ export default function Consumo() {
     mesaId,
     mesero,
     moneda,
+    restaurantImage,
   });
 
   const [tipApplied, setTipApplied] = useState(null);
@@ -267,7 +272,7 @@ export default function Consumo() {
     route?.params,
   ]);
 
-  const addTipLabel = tipApplied ? 'Añadir/editar propina' : 'Aceptar';
+  const addTipLabel = tipApplied ? 'Aceptar' : 'Aceptar';
 
   const handleBack = () =>
     navigation.canGoBack?.() ? navigation.goBack() : null;
@@ -330,7 +335,11 @@ export default function Consumo() {
               />
               <View style={styles.logoWrap}>
                 <Image
-                  source={require('../../assets/images/restaurante.jpeg')}
+                  source={
+                    restaurantImage
+                      ? {uri: restaurantImage}
+                      : require('../../assets/images/restaurante.jpeg')
+                  }
                   style={styles.restaurantImage}
                 />
               </View>
@@ -475,7 +484,7 @@ export default function Consumo() {
       {errorModal.visible && (
         <View style={styles.modalBackdrop}>
           <LinearGradient
-            colors={['#FF2FA0', '#6B2CFF', '#0046ff']}
+            colors={['#9F4CFF', '#6A43FF', '#2C7DFF']}
             style={styles.modalBox}>
             <Text style={styles.modalTitle}>{errorModal.title}</Text>
             <Text style={styles.modalMessage}>{errorModal.message}</Text>

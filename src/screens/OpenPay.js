@@ -1,5 +1,4 @@
-//Prev images
-// OpenPay.js (modales: tamaño dinámico + logos oficiales en el formulario) DELETE CARD NOT WORKING
+//token
 import React, {useRef, useState, useEffect} from 'react';
 import {
   View,
@@ -28,6 +27,7 @@ import {useNavigation, useRoute} from '@react-navigation/native';
 import LinearGradient from 'react-native-linear-gradient';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const lastTransactionKeyForSale = saleId => `last_transaction_${saleId}`;
 const safeNum = v => {
@@ -48,6 +48,8 @@ export default function OpenPay() {
   const navigation = useNavigation();
   const route = useRoute();
   const insets = useSafeAreaInsets();
+
+  const bottomSafe = Math.round(insets.bottom || 0);
   const {width: winW, height: winH} = useWindowDimensions();
   const params = route.params ?? {};
 
@@ -60,6 +62,8 @@ export default function OpenPay() {
   // modal sizing (used for saved cards modal)
   const modalWidth = Math.min(700, winW - 24);
   const maxModalHeight = Math.min(680, winH - 120);
+
+  const hp = p => (Number(p) / 100) * winH;
 
   // UI state
   const [loading, setLoading] = useState(true);
@@ -102,7 +106,6 @@ export default function OpenPay() {
   // params defaults
   const {
     api_host = 'https://api.tab-track.com',
-    api_token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78',
     sucursal_id = null,
     sale_id = null,
     usuario_app_id = null,
@@ -158,6 +161,7 @@ export default function OpenPay() {
     intervalMs = 3000,
   ) => {
     if (!transactionId) return {ok: false, reason: 'no_tx'};
+    await ensureToken();
     const hostBase = (api_host || 'https://127.0.0.1').replace(/\/$/, '');
     const url = `${hostBase}/api/transacciones-pago/${encodeURIComponent(
       transactionId,
@@ -170,7 +174,7 @@ export default function OpenPay() {
           headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
-            ...(api_token ? {Authorization: `Bearer ${api_token}`} : {}),
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
           },
         });
         if (res.ok) {
@@ -310,6 +314,7 @@ export default function OpenPay() {
     set_preferred,
   }) => {
     if (!sucursal_id) throw new Error('Falta sucursal_id');
+    await ensureToken();
     const hostBase = (api_host || 'https://127.0.0.1').replace(/\/$/, '');
     const url = `${hostBase}/api/mobileapp/sucursales/${encodeURIComponent(
       sucursal_id,
@@ -347,7 +352,7 @@ export default function OpenPay() {
         headers: {
           'Content-Type': 'application/json',
           'Idempotency-Key': idKey,
-          ...(api_token ? {Authorization: `Bearer ${api_token}`} : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
         body: JSON.stringify(body),
       });
@@ -449,6 +454,7 @@ export default function OpenPay() {
       moneda,
       usuario_app_id:
         usuario_app_id ?? params.userEmail ?? usuario_app_id ?? '',
+      redirect_url: 'https://www.tab-track.com/success_payment.html',
       customer_data: {
         email: customer_email || params.userEmail || userEmail || '',
         nombre: holder_name || params.userFullname || userFullname || '',
@@ -471,12 +477,13 @@ export default function OpenPay() {
     });
 
     try {
+      await ensureToken();
       const url = buildTransactionUrl();
       const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(api_token ? {Authorization: `Bearer ${api_token}`} : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
         body: JSON.stringify(body),
       });
@@ -618,6 +625,7 @@ export default function OpenPay() {
       payment_method_id,
       moneda,
       usuario_app_id: usuario_app_id_to_send,
+      redirect_url: 'https://www.tab-track.com/success_payment.html',
       customer_data: {},
       metadata: {
         mesa_id: mesa_id ?? null,
@@ -644,12 +652,13 @@ export default function OpenPay() {
     console.warn('[DEBUG] processPaymentWithSavedCard - body:', body);
 
     try {
+      await ensureToken();
       const url = buildTransactionUrl();
       const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(api_token ? {Authorization: `Bearer ${api_token}`} : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
         body: JSON.stringify(body),
       });
@@ -963,12 +972,13 @@ export default function OpenPay() {
       }
 
       try {
+        await ensureToken();
         const hostBase = (api_host || 'https://127.0.0.1').replace(/\/$/, '');
         const res = await fetch(`${hostBase}/api/openpay-credentials`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(api_token ? {Authorization: `Bearer ${api_token}`} : {}),
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
           },
           body: JSON.stringify({sucursal_id}),
         });
@@ -1081,6 +1091,7 @@ export default function OpenPay() {
       }
       usuarioAppUuid = usuarioAppUuid || usuario_app_id || '';
 
+      await ensureToken();
       const hostBase = (api_host || 'https://127.0.0.1').replace(/\/$/, '');
       const url = `${hostBase}/api/mobileapp/sucursales/${encodeURIComponent(
         sucursal_id,
@@ -1096,7 +1107,7 @@ export default function OpenPay() {
         headers: {
           'Content-Type': 'application/json',
           'Idempotency-Key': idKey,
-          ...(api_token ? {Authorization: `Bearer ${api_token}`} : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
       });
       const json = await res.json().catch(() => null);
@@ -1258,11 +1269,7 @@ export default function OpenPay() {
   // NEW: confirm delete saved card (open modal)
   const confirmDeleteSavedCard = card => {
     setCardToDelete(card);
-    setSavedCardsModalVisible(false);
-
-    setTimeout(() => {
-      setDeleteConfirmVisible(true);
-    }, 1);
+    setDeleteConfirmVisible(true);
   };
 
   // NEW: show toast
@@ -1318,12 +1325,13 @@ export default function OpenPay() {
     const idKey = genIdempotencyKey();
 
     try {
+      await ensureToken();
       const res = await fetch(url, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
           'Idempotency-Key': idKey,
-          ...(api_token ? {Authorization: `Bearer ${api_token}`} : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
         body: JSON.stringify({usuario_app_id: usuarioAppUuid}),
       });
@@ -1400,560 +1408,572 @@ export default function OpenPay() {
         backgroundColor="transparent"
         translucent
       />
-
-      <View style={styles.nativeHeader}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={22} color="#0b58ff" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Tu cuenta</Text>
-        <Text style={styles.headerDate}>{currentDateText}</Text>
-      </View>
-
-      <LinearGradient
-        colors={['#9F4CFF', '#6A43FF', '#2C7DFF']}
-        start={{x: 0, y: 0}}
-        end={{x: 1, y: 0}}
-        style={[
-          styles.gradientHeader,
-          {
-            paddingHorizontal: 0,
-            paddingTop: 20,
-            paddingBottom: 10,
-            borderBottomRightRadius: 20,
-          },
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          {paddingBottom: Math.max(hp(3), bottomSafe + 12)},
         ]}>
-        <View style={styles.gradientInner}>
-          <View style={[styles.gradientLeftColumn]}>
-            <Image
-              source={nativeLogoSource}
-              style={[styles.gradientLogo, {width: LOGO_W}]}
-              resizeMode="contain"
-            />
-            <Image
-              source={restaurantSrc}
-              style={[
-                styles.gradientRestaurant,
-                {width: RESTAURANT_W, height: RESTAURANT_W, marginTop: 20},
-              ]}
-              resizeMode="cover"
-            />
-          </View>
-
-          <View style={styles.gradientRight}>
-            <Text style={styles.gradientSmall}>Total</Text>
-            <View style={{flexDirection: 'row', alignItems: 'flex-end'}}>
-              <Text
-                style={[
-                  styles.gradientTotal,
-                  {fontSize: Math.max(22, Math.round(winW * 0.07))},
-                ]}>
-                {formatAmount(displayAmountFinal)}
-              </Text>
-              <Text style={styles.gradientCurrency}> {moneda ?? 'MXN'}</Text>
-            </View>
-            <Text style={styles.gradientDetail}>Detalle</Text>
-            <Text style={styles.gradientCount}>
-              {Array.isArray(items) ? items.length : 0}{' '}
-              {Array.isArray(items) && items.length === 1 ? 'item' : 'items'}
-            </Text>
-          </View>
+        <View style={styles.nativeHeader}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={22} color="#0b58ff" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Tu cuenta</Text>
+          <Text style={styles.headerDate}>{currentDateText}</Text>
         </View>
-      </LinearGradient>
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={[styles.mainWrap, {paddingHorizontal: H_PADDING}]}>
-        <View style={styles.card}>
-          <View style={{height: 14}} />
-
-          <View
-            style={[
-              styles.form,
-              {padding: Math.max(12, Math.round(winW * 0.03))},
-            ]}>
-            <Text style={styles.formLabel}>Pagar con tarjeta</Text>
-            Logos area: ahora con imágenes oficiales
-            <View style={styles.logosRow}>
+        <LinearGradient
+          colors={['#9F4CFF', '#6A43FF', '#2C7DFF']}
+          start={{x: 0, y: 0}}
+          end={{x: 1, y: 0}}
+          style={[
+            styles.gradientHeader,
+            {
+              paddingHorizontal: 0,
+              paddingTop: 20,
+              paddingBottom: 10,
+              borderBottomRightRadius: 20,
+            },
+          ]}>
+          <View style={styles.gradientInner}>
+            <View style={[styles.gradientLeftColumn]}>
               <Image
-                source={LOGO_OPENPAY}
-                style={styles.brandLogo}
+                source={nativeLogoSource}
+                style={[styles.gradientLogo, {width: LOGO_W}]}
                 resizeMode="contain"
               />
               <Image
-                source={LOGO_PAYNET}
-                style={styles.brandLogo}
-                resizeMode="contain"
+                source={restaurantSrc}
+                style={[
+                  styles.gradientRestaurant,
+                  {width: RESTAURANT_W, height: RESTAURANT_W, marginTop: 20},
+                ]}
+                resizeMode="cover"
               />
             </View>
-            <View style={styles.inputWrap}>
-              <Ionicons
-                name="person-outline"
-                size={18}
-                color="#6b7280"
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Nombre en la tarjeta"
-                value={holder}
-                onChangeText={setHolder}
-                returnKeyType="next"
-                placeholderTextColor="#96a0b8"
-              />
-            </View>
-            <View style={styles.inputWrap}>
-              <Ionicons
-                name="card-outline"
-                size={18}
-                color="#6b7280"
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Número de tarjeta"
-                value={cardNum}
-                onChangeText={onCardNumChange}
-                keyboardType="number-pad"
-                maxLength={23}
-                placeholderTextColor="#96a0b8"
-              />
-              {/* SOLO mostrar el texto si ya hay tarjetas cargadas */}
-              {Array.isArray(savedCards) && savedCards.length > 0 ? (
-                <TouchableOpacity
-                  onPress={() => fetchSavedCards(true)}
-                  style={{paddingHorizontal: 8, paddingVertical: 6}}>
-                  <Text style={{color: '#0b58ff', fontWeight: '700'}}>
-                    Usar tarjeta guardada
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-            {showCardFields && (
-              <View style={styles.rowSmall}>
-                <View style={styles.inputWrapSmall}>
-                  <Ionicons
-                    name="calendar-outline"
-                    size={16}
-                    color="#6b7280"
-                    style={styles.inputIconSmall}
-                  />
-                  <TextInput
-                    style={styles.inputSmall}
-                    placeholder="MM"
-                    value={mm}
-                    onChangeText={t => setMm(t.replace(/\D/g, '').slice(0, 2))}
-                    keyboardType="number-pad"
-                    placeholderTextColor="#96a0b8"
-                  />
-                </View>
 
-                <View style={styles.inputWrapSmall}>
-                  <Ionicons
-                    name="calendar-outline"
-                    size={16}
-                    color="#6b7280"
-                    style={styles.inputIconSmall}
-                  />
-                  <TextInput
-                    style={styles.inputSmall}
-                    placeholder="AA"
-                    value={yy}
-                    onChangeText={t => setYy(t.replace(/\D/g, '').slice(0, 2))}
-                    keyboardType="number-pad"
-                    placeholderTextColor="#96a0b8"
-                  />
-                </View>
-
-                <View style={styles.inputWrapSmall}>
-                  <Ionicons
-                    name="keypad-outline"
-                    size={16}
-                    color="#6b7280"
-                    style={styles.inputIconSmall}
-                  />
-                  <TextInput
-                    style={styles.inputSmall}
-                    placeholder="CVV"
-                    value={cvv}
-                    onChangeText={t => setCvv(t.replace(/\D/g, '').slice(0, 4))}
-                    keyboardType="number-pad"
-                    placeholderTextColor="#96a0b8"
-                  />
-                </View>
+            <View style={styles.gradientRight}>
+              <Text style={styles.gradientSmall}>Total</Text>
+              <View style={{flexDirection: 'row', alignItems: 'flex-end'}}>
+                <Text
+                  style={[
+                    styles.gradientTotal,
+                    {fontSize: Math.max(22, Math.round(winW * 0.07))},
+                  ]}>
+                  {formatAmount(displayAmountFinal)}
+                </Text>
+                <Text style={styles.gradientCurrency}> {moneda ?? 'MXN'}</Text>
               </View>
-            )}{' '}
-            {/*FALTA KEYBOARD.DISSMISS()*/}
-            <View style={styles.inputWrap}>
-              <Ionicons
-                name="mail-outline"
-                size={18}
-                color="#6b7280"
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Correo electrónico"
-                value={email}
-                onChangeText={setEmail}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                placeholderTextColor="#96a0b8"
-              />
+              <Text style={styles.gradientDetail}>Detalle</Text>
+              <Text style={styles.gradientCount}>
+                {Array.isArray(items) ? items.length : 0}{' '}
+                {Array.isArray(items) && items.length === 1 ? 'item' : 'items'}
+              </Text>
             </View>
           </View>
-          <View style={{marginTop: PAY_BTN_MARGIN_TOP, alignItems: 'center'}}>
-            <TouchableOpacity
+        </LinearGradient>
+
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={[styles.mainWrap, {paddingHorizontal: H_PADDING}]}>
+          <View style={styles.card}>
+            <View style={{height: 14}} />
+
+            <View
               style={[
-                styles.payBtn,
-                {width: Math.min(560, winW - H_PADDING * 2)},
-              ]}
-              onPress={onPayPress}
-              activeOpacity={0.9}
-              disabled={processing}>
-              {processing ? (
-                <ActivityIndicator color="#fff" style={{marginRight: 10}} />
-              ) : (
+                styles.form,
+                {padding: Math.max(12, Math.round(winW * 0.03))},
+              ]}>
+              <Text style={styles.formLabel}>Pagar con tarjeta</Text>
+              Logos area: ahora con imágenes oficiales
+              <View style={styles.logosRow}>
+                <Image
+                  source={LOGO_OPENPAY}
+                  style={styles.brandLogo}
+                  resizeMode="contain"
+                />
+                <Image
+                  source={LOGO_PAYNET}
+                  style={styles.brandLogo}
+                  resizeMode="contain"
+                />
+              </View>
+              <View style={styles.inputWrap}>
+                <Ionicons
+                  name="person-outline"
+                  size={18}
+                  color="#6b7280"
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Nombre en la tarjeta"
+                  value={holder}
+                  onChangeText={setHolder}
+                  returnKeyType="next"
+                  placeholderTextColor="#96a0b8"
+                />
+              </View>
+              <View style={styles.inputWrap}>
                 <Ionicons
                   name="card-outline"
                   size={18}
-                  color="#fff"
-                  style={{marginRight: 8}}
+                  color="#6b7280"
+                  style={styles.inputIcon}
                 />
-              )}
-              <Text style={styles.payBtnText}>
-                {processing ? 'Procesando…' : 'Pagar'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Número de tarjeta"
+                  value={cardNum}
+                  onChangeText={onCardNumChange}
+                  keyboardType="number-pad"
+                  maxLength={23}
+                  placeholderTextColor="#96a0b8"
+                />
+                {/* SOLO mostrar el texto si ya hay tarjetas cargadas */}
+                {Array.isArray(savedCards) && savedCards.length > 0 ? (
+                  <TouchableOpacity
+                    onPress={() => fetchSavedCards(true)}
+                    style={{paddingHorizontal: 8, paddingVertical: 6}}>
+                    <Text style={{color: '#0b58ff', fontWeight: '700'}}>
+                      Usar tarjeta guardada
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              {showCardFields && (
+                <View style={styles.rowSmall}>
+                  <View style={styles.inputWrapSmall}>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={16}
+                      color="#6b7280"
+                      style={styles.inputIconSmall}
+                    />
+                    <TextInput
+                      style={styles.inputSmall}
+                      placeholder="MM"
+                      value={mm}
+                      onChangeText={t =>
+                        setMm(t.replace(/\D/g, '').slice(0, 2))
+                      }
+                      keyboardType="number-pad"
+                      placeholderTextColor="#96a0b8"
+                    />
+                  </View>
 
-      <View style={{height: 0, width: 0, opacity: 0}}>
-        <WebView
-          ref={webviewRef}
-          originWhitelist={['*']}
-          source={{html}}
-          onMessage={handleWebMessage}
-          javaScriptEnabled
-          domStorageEnabled
-          startInLoadingState
-          style={{flex: 1}}
-        />
-      </View>
-      {/* Modal: Guardar tarjeta (responsive & compact - MATCHES stripe modal style) */}
-      <Modal
-        visible={saveCardModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          if (!savingCard) setSaveCardModalVisible(false);
-        }}>
-        <View style={styles.autoModalBackdrop}>
-          <View
-            style={[
-              styles.autoModalBox,
-              {
-                width: Math.min(360, winW - 48),
-                flexDirection: 'column',
-                padding: 18,
-              },
-            ]}>
-            <Text
-              style={{
-                fontSize: 16,
-                fontWeight: '800',
-                color: '#0b1220',
-                marginBottom: 8,
-              }}>
-              ¿Deseas guardar esta tarjeta?
-            </Text>
-            <Text style={{fontSize: 13, color: '#334155', marginBottom: 14}}>
-              Puedes guardar la tarjeta en OpenPay para futuros pagos. Elige una
-              opción:
-            </Text>
+                  <View style={styles.inputWrapSmall}>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={16}
+                      color="#6b7280"
+                      style={styles.inputIconSmall}
+                    />
+                    <TextInput
+                      style={styles.inputSmall}
+                      placeholder="AA"
+                      value={yy}
+                      onChangeText={t =>
+                        setYy(t.replace(/\D/g, '').slice(0, 2))
+                      }
+                      keyboardType="number-pad"
+                      placeholderTextColor="#96a0b8"
+                    />
+                  </View>
 
-            <View
-              style={{
-                flexDirection: 'row',
-                justifyContent: 'space-between',
-                gap: 8,
-              }}>
-              <TouchableOpacity
-                onPress={handleContinueWithoutSavingOpenpayToken}
-                style={{
-                  flex: 1,
-                  paddingVertical: 10,
-                  borderRadius: 10,
-                  borderWidth: 1,
-                  borderColor: '#e6eefb',
-                  alignItems: 'center',
-                  backgroundColor: '#fff',
-                }}
-                disabled={savingCard}>
-                <Text style={{fontWeight: '700', color: '#0b58ff'}}>
-                  Continuar sin guardar
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={handleSaveAndPayWithOpenpayToken}
-                style={{
-                  flex: 1,
-                  paddingVertical: 10,
-                  borderRadius: 10,
-                  alignItems: 'center',
-                  backgroundColor: '#0b58ff',
-                }}
-                disabled={savingCard}>
-                {savingCard ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={{fontWeight: '800', color: '#fff'}}>
-                    Guardar y pagar
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              onPress={() => {
-                if (!savingCard) setSaveCardModalVisible(false);
-              }}
-              style={{marginTop: 12, alignItems: 'center'}}
-              disabled={savingCard}>
-              <Text style={{color: '#6b7280'}}>Cancelar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Modal: Tarjetas guardadas (responsive & compact; altura dinámica + scroll interno) */}
-      <Modal
-        visible={savedCardsModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setSavedCardsModalVisible(false)}>
-        <View style={styles.autoModalBackdrop}>
-          <View
-            style={[
-              styles.savedCardsModalBox,
-              {width: modalWidth, height: computedModalHeight},
-            ]}>
-            <View
-              style={{
-                padding: 14,
-                borderBottomWidth: 1,
-                borderColor: '#eef4ff',
-              }}>
-              <Text style={{fontSize: 18, fontWeight: '900', color: '#0b1220'}}>
-                Tarjetas guardadas
-              </Text>
-              <Text style={{fontSize: 13, color: '#334155', marginTop: 6}}>
-                Toca una tarjeta para seleccionarla o pulsa "Usar otra".
-              </Text>
-            </View>
-
-            <View style={{padding: 8, flex: 1}}>
-              {loadingSavedCards ? (
-                <View style={{padding: 12, alignItems: 'center'}}>
-                  <ActivityIndicator />
+                  <View style={styles.inputWrapSmall}>
+                    <Ionicons
+                      name="keypad-outline"
+                      size={16}
+                      color="#6b7280"
+                      style={styles.inputIconSmall}
+                    />
+                    <TextInput
+                      style={styles.inputSmall}
+                      placeholder="CVV"
+                      value={cvv}
+                      onChangeText={t =>
+                        setCvv(t.replace(/\D/g, '').slice(0, 4))
+                      }
+                      keyboardType="number-pad"
+                      placeholderTextColor="#96a0b8"
+                    />
+                  </View>
                 </View>
-              ) : (
-                <FlatList
-                  data={savedCards}
-                  keyExtractor={i =>
-                    String(i.id ?? i.external_id ?? Math.random())
-                  }
-                  style={{flex: 1}}
-                  contentContainerStyle={{paddingBottom: 12}}
-                  renderItem={({item}) => (
-                    <View style={styles.savedCardRow}>
-                      <TouchableOpacity
-                        onPress={() => onSelectSavedCard(item)}
-                        style={{flex: 1}}>
-                        <View>
-                          <Text style={{fontWeight: '800', color: '#0b1220'}}>
-                            {(item.brand || '').toUpperCase()} • ****{' '}
-                            {item.last4 ?? ''}
-                          </Text>
-                          <Text
-                            style={{
-                              fontSize: 12,
-                              color: '#6b7280',
-                              marginTop: 4,
-                            }}>
-                            Vence: {String(item.exp_month || '--')}/
-                            {String(item.exp_year || '--')}{' '}
-                            {item.is_preferred ? ' • Preferida' : ''}
-                          </Text>
-                        </View>
-                      </TouchableOpacity>
-                      <View style={{alignItems: 'flex-end'}}>
-                        {/* delete button */}
-                        <TouchableOpacity
-                          onPress={() => confirmDeleteSavedCard(item)}
-                          style={{padding: 6}}>
-                          <Ionicons
-                            name="remove-circle-outline"
-                            size={22}
-                            color="#ef4444"
-                          />
-                        </TouchableOpacity>
-                        <Text style={{fontSize: 12, color: '#64748b'}}>
-                          {item.status ?? ''}
-                        </Text>
-                      </View>
-                    </View>
-                  )}
-                  ListEmptyComponent={() => (
-                    <View style={{padding: 12}}>
-                      <Text style={{color: '#6b7280'}}>
-                        No hay tarjetas guardadas.
-                      </Text>
-                    </View>
-                  )}
+              )}{' '}
+              {/*FALTA KEYBOARD.DISSMISS()*/}
+              <View style={styles.inputWrap}>
+                <Ionicons
+                  name="mail-outline"
+                  size={18}
+                  color="#6b7280"
+                  style={styles.inputIcon}
                 />
-              )}
+                <TextInput
+                  style={styles.input}
+                  placeholder="Correo electrónico"
+                  value={email}
+                  onChangeText={setEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  placeholderTextColor="#96a0b8"
+                />
+              </View>
             </View>
-
-            <View
-              style={{
-                padding: 12,
-                borderTopWidth: 1,
-                borderColor: '#eef4ff',
-                flexDirection: 'row',
-                justifyContent: 'space-between',
-              }}>
+            <View style={{marginTop: PAY_BTN_MARGIN_TOP, alignItems: 'center'}}>
               <TouchableOpacity
-                onPress={onUseAnotherCard}
-                style={{
-                  paddingVertical: 10,
-                  paddingHorizontal: 14,
-                  borderRadius: 10,
-                  borderWidth: 1,
-                  borderColor: '#e6eefb',
-                  backgroundColor: '#fff',
-                }}>
-                <Text style={{fontWeight: '700', color: '#0b58ff'}}>
-                  Usar otra
+                style={[
+                  styles.payBtn,
+                  {width: Math.min(560, winW - H_PADDING * 2)},
+                ]}
+                onPress={onPayPress}
+                activeOpacity={0.9}
+                disabled={processing}>
+                {processing ? (
+                  <ActivityIndicator color="#fff" style={{marginRight: 10}} />
+                ) : (
+                  <Ionicons
+                    name="card-outline"
+                    size={18}
+                    color="#fff"
+                    style={{marginRight: 8}}
+                  />
+                )}
+                <Text style={styles.payBtnText}>
+                  {processing ? 'Procesando…' : 'Pagar'}
                 </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setSavedCardsModalVisible(false)}
-                style={{
-                  paddingVertical: 10,
-                  paddingHorizontal: 14,
-                  borderRadius: 10,
-                  backgroundColor: '#0b58ff',
-                }}>
-                <Text style={{fontWeight: '800', color: '#fff'}}>Cerrar</Text>
               </TouchableOpacity>
             </View>
           </View>
-        </View>
-      </Modal>
-      {/* Modal confirmación eliminar tarjeta */}
-      <Modal
-        visible={deleteConfirmVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          if (!deletingCard) setDeleteConfirmVisible(false);
-        }}>
-        <View style={styles.autoModalBackdrop}>
-          <View
-            style={[
-              styles.autoModalBox,
-              {
-                width: Math.min(360, winW - 48),
-                flexDirection: 'column',
-                padding: 18,
-              },
-            ]}>
-            <Text
-              style={{
-                fontSize: 16,
-                fontWeight: '800',
-                color: '#0b1220',
-                marginBottom: 8,
-              }}>
-              Eliminar tarjeta
-            </Text>
-            <Text style={{fontSize: 13, color: '#334155', marginBottom: 14}}>
-              ¿Estás seguro que deseas eliminar esta tarjeta? Esta acción no se
-              puede deshacer.
-            </Text>
+        </KeyboardAvoidingView>
 
+        <View style={{height: 0, width: 0, opacity: 0}}>
+          <WebView
+            ref={webviewRef}
+            originWhitelist={['*']}
+            source={{html}}
+            onMessage={handleWebMessage}
+            javaScriptEnabled
+            domStorageEnabled
+            startInLoadingState
+            style={{flex: 1}}
+          />
+        </View>
+        {/* Modal: Guardar tarjeta (responsive & compact - MATCHES stripe modal style) */}
+        <Modal
+          visible={saveCardModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            if (!savingCard) setSaveCardModalVisible(false);
+          }}>
+          <View style={styles.autoModalBackdrop}>
             <View
-              style={{
-                flexDirection: 'row',
-                justifyContent: 'space-between',
-                gap: 8,
-              }}>
+              style={[
+                styles.autoModalBox,
+                {
+                  width: Math.min(360, winW - 48),
+                  flexDirection: 'column',
+                  padding: 18,
+                },
+              ]}>
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontWeight: '800',
+                  color: '#0b1220',
+                  marginBottom: 8,
+                }}>
+                ¿Deseas guardar esta tarjeta?
+              </Text>
+              <Text style={{fontSize: 13, color: '#334155', marginBottom: 14}}>
+                Puedes guardar la tarjeta en OpenPay para futuros pagos. Elige
+                una opción:
+              </Text>
+
+              <View
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                }}>
+                <TouchableOpacity
+                  onPress={handleContinueWithoutSavingOpenpayToken}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 10,
+                    borderRadius: 10,
+                    borderWidth: 1,
+                    borderColor: '#e6eefb',
+                    alignItems: 'center',
+                    backgroundColor: '#fff',
+                  }}
+                  disabled={savingCard}>
+                  <Text style={{fontWeight: '700', color: '#0b58ff'}}>
+                    Continuar sin guardar
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={handleSaveAndPayWithOpenpayToken}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 10,
+                    borderRadius: 10,
+                    alignItems: 'center',
+                    backgroundColor: '#0b58ff',
+                  }}
+                  disabled={savingCard}>
+                  {savingCard ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={{fontWeight: '800', color: '#fff'}}>
+                      Guardar y pagar
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+
               <TouchableOpacity
                 onPress={() => {
-                  if (!deletingCard) setDeleteConfirmVisible(false);
-                  setCardToDelete(null);
+                  if (!savingCard) setSaveCardModalVisible(false);
                 }}
-                style={{
-                  flex: 1,
-                  paddingVertical: 10,
-                  borderRadius: 10,
-                  borderWidth: 1,
-                  borderColor: '#e6eefb',
-                  alignItems: 'center',
-                  backgroundColor: '#fff',
-                }}
-                disabled={deletingCard}>
-                <Text style={{fontWeight: '700', color: '#0b58ff'}}>
-                  Cancelar
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={performDeleteSavedCard}
-                style={{
-                  flex: 1,
-                  paddingVertical: 10,
-                  borderRadius: 10,
-                  alignItems: 'center',
-                  backgroundColor: '#ef4444',
-                }}
-                disabled={deletingCard}>
-                {deletingCard ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={{fontWeight: '800', color: '#fff'}}>
-                    Sí, eliminar
-                  </Text>
-                )}
+                style={{marginTop: 12, alignItems: 'center'}}
+                disabled={savingCard}>
+                <Text style={{color: '#6b7280'}}>Cancelar</Text>
               </TouchableOpacity>
             </View>
           </View>
-        </View>
-      </Modal>
-      {processing && (
-        <View style={styles.processingOverlay}>
-          <View style={styles.processingBox}>
-            <ActivityIndicator
-              size="large"
-              color="#0b58ff"
-              style={{marginRight: 12}}
-            />
-            <Text style={styles.processingText}>Procesando pago…</Text>
+        </Modal>
+
+        {/* Modal: Tarjetas guardadas (responsive & compact; altura dinámica + scroll interno) */}
+        <Modal
+          visible={savedCardsModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setSavedCardsModalVisible(false)}>
+          <View style={styles.autoModalBackdrop}>
+            <View
+              style={[
+                styles.savedCardsModalBox,
+                {width: modalWidth, height: computedModalHeight},
+              ]}>
+              <View
+                style={{
+                  padding: 14,
+                  borderBottomWidth: 1,
+                  borderColor: '#eef4ff',
+                }}>
+                <Text
+                  style={{fontSize: 18, fontWeight: '900', color: '#0b1220'}}>
+                  Tarjetas guardadas
+                </Text>
+                <Text style={{fontSize: 13, color: '#334155', marginTop: 6}}>
+                  Toca una tarjeta para seleccionarla o pulsa "Usar otra".
+                </Text>
+              </View>
+
+              <View style={{padding: 8, flex: 1}}>
+                {loadingSavedCards ? (
+                  <View style={{padding: 12, alignItems: 'center'}}>
+                    <ActivityIndicator />
+                  </View>
+                ) : (
+                  <FlatList
+                    data={savedCards}
+                    keyExtractor={i =>
+                      String(i.id ?? i.external_id ?? Math.random())
+                    }
+                    style={{flex: 1}}
+                    contentContainerStyle={{paddingBottom: 12}}
+                    renderItem={({item}) => (
+                      <View style={styles.savedCardRow}>
+                        <TouchableOpacity
+                          onPress={() => onSelectSavedCard(item)}
+                          style={{flex: 1}}>
+                          <View>
+                            <Text style={{fontWeight: '800', color: '#0b1220'}}>
+                              {(item.brand || '').toUpperCase()} • ****{' '}
+                              {item.last4 ?? ''}
+                            </Text>
+                            <Text
+                              style={{
+                                fontSize: 12,
+                                color: '#6b7280',
+                                marginTop: 4,
+                              }}>
+                              Vence: {String(item.exp_month || '--')}/
+                              {String(item.exp_year || '--')}{' '}
+                              {item.is_preferred ? ' • Preferida' : ''}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                        <View style={{alignItems: 'flex-end'}}>
+                          {/* delete button */}
+                          <TouchableOpacity
+                            onPress={() => confirmDeleteSavedCard(item)}
+                            style={{padding: 6}}>
+                            <Ionicons
+                              name="remove-circle-outline"
+                              size={22}
+                              color="#ef4444"
+                            />
+                          </TouchableOpacity>
+                          <Text style={{fontSize: 12, color: '#64748b'}}>
+                            {item.status ?? ''}
+                          </Text>
+                        </View>
+                      </View>
+                    )}
+                    ListEmptyComponent={() => (
+                      <View style={{padding: 12}}>
+                        <Text style={{color: '#6b7280'}}>
+                          No hay tarjetas guardadas.
+                        </Text>
+                      </View>
+                    )}
+                  />
+                )}
+              </View>
+
+              <View
+                style={{
+                  padding: 12,
+                  borderTopWidth: 1,
+                  borderColor: '#eef4ff',
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                }}>
+                <TouchableOpacity
+                  onPress={onUseAnotherCard}
+                  style={{
+                    paddingVertical: 10,
+                    paddingHorizontal: 14,
+                    borderRadius: 10,
+                    borderWidth: 1,
+                    borderColor: '#e6eefb',
+                    backgroundColor: '#fff',
+                  }}>
+                  <Text style={{fontWeight: '700', color: '#0b58ff'}}>
+                    Usar otra
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setSavedCardsModalVisible(false)}
+                  style={{
+                    paddingVertical: 10,
+                    paddingHorizontal: 14,
+                    borderRadius: 10,
+                    backgroundColor: '#0b58ff',
+                  }}>
+                  <Text style={{fontWeight: '800', color: '#fff'}}>Cerrar</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
-        </View>
-      )}
-      {/* Toast estilizado (nuevo) */}
-      {toastVisible && (
-        <Animated.View
-          pointerEvents="none"
-          style={[styles.toastBox, {opacity: toastOpacity}]}>
-          <Text style={styles.toastText}>{toastMessage}</Text>
-        </Animated.View>
-      )}
+        </Modal>
+        {/* Modal confirmación eliminar tarjeta */}
+        <Modal
+          visible={deleteConfirmVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            if (!deletingCard) setDeleteConfirmVisible(false);
+          }}>
+          <View style={styles.autoModalBackdrop}>
+            <View
+              style={[
+                styles.autoModalBox,
+                {
+                  width: Math.min(360, winW - 48),
+                  flexDirection: 'column',
+                  padding: 18,
+                },
+              ]}>
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontWeight: '800',
+                  color: '#0b1220',
+                  marginBottom: 8,
+                }}>
+                Eliminar tarjeta
+              </Text>
+              <Text style={{fontSize: 13, color: '#334155', marginBottom: 14}}>
+                ¿Estás seguro que deseas eliminar esta tarjeta? Esta acción no
+                se puede deshacer.
+              </Text>
+
+              <View
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                }}>
+                <TouchableOpacity
+                  onPress={() => {
+                    if (!deletingCard) setDeleteConfirmVisible(false);
+                    setCardToDelete(null);
+                  }}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 10,
+                    borderRadius: 10,
+                    borderWidth: 1,
+                    borderColor: '#e6eefb',
+                    alignItems: 'center',
+                    backgroundColor: '#fff',
+                  }}
+                  disabled={deletingCard}>
+                  <Text style={{fontWeight: '700', color: '#0b58ff'}}>
+                    Cancelar
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={performDeleteSavedCard}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 10,
+                    borderRadius: 10,
+                    alignItems: 'center',
+                    backgroundColor: '#ef4444',
+                  }}
+                  disabled={deletingCard}>
+                  {deletingCard ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={{fontWeight: '800', color: '#fff'}}>
+                      Sí, eliminar
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+        {processing && (
+          <View style={styles.processingOverlay}>
+            <View style={styles.processingBox}>
+              <ActivityIndicator
+                size="large"
+                color="#0b58ff"
+                style={{marginRight: 12}}
+              />
+              <Text style={styles.processingText}>Procesando pago…</Text>
+            </View>
+          </View>
+        )}
+        {/* Toast estilizado (nuevo) */}
+        {toastVisible && (
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.toastBox, {opacity: toastOpacity}]}>
+            <Text style={styles.toastText}>{toastMessage}</Text>
+          </Animated.View>
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }

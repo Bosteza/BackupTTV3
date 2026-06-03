@@ -145,7 +145,7 @@ function makeStyles({
   gifMarginBottom,
 }) {
   return StyleSheet.create({
-    safe: {flex: 1, backgroundColor: '#FFFF'},
+    safe: {flex: 1, backgroundColor: '#7C3AED'},
 
     gradient: {
       flex: 1,

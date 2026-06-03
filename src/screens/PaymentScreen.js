@@ -1,4 +1,4 @@
-//2 april good
+//token
 import React, {useEffect, useMemo, useState, useRef} from 'react';
 
 import {
@@ -23,6 +23,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useNavigation, useRoute} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const logoTabTrack = require('../../assets/images/logo2.png');
 const placeholderMerchant = require('../../assets/images/restaurante.jpeg');
@@ -36,8 +37,6 @@ const formatMoney = n =>
     : '0.00';
 
 const API_HOST_CONST = 'https://api.tab-track.com';
-const API_TOKEN_CONST =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const AS_KEYS = {
   USER_EMAIL: 'user_email',
@@ -186,6 +185,7 @@ export default function PaymentScreen() {
   }, [params]);
 
   const {width, height} = useWindowDimensions();
+
   const insets = useSafeAreaInsets();
   const topSafe = Math.round(
     Math.max(
@@ -328,7 +328,7 @@ export default function PaymentScreen() {
   const mesero = params.mesero ?? params.waiter ?? null;
 
   const apiHost = params.api_host ?? API_HOST_CONST;
-  const apiToken = params.api_token ?? API_TOKEN_CONST;
+  const apiToken = params.api_token ?? TOKEN;
   const environment = params.environment ?? 'sandbox';
   const providedReturnUrl = params.return_url ?? params.returnUrl ?? null;
   const providedCancelUrl = params.cancel_url ?? params.cancelUrl ?? null;
@@ -427,6 +427,7 @@ export default function PaymentScreen() {
 
   const checkGatewayAvailable = async gateway => {
     try {
+      await ensureToken();
       if (!sucursal_id) return null;
       const hostBase = (apiHost || API_HOST_CONST).replace(/\/$/, '');
       const checkUrl = `${hostBase}/api/sucursales/${encodeURIComponent(
@@ -437,7 +438,7 @@ export default function PaymentScreen() {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          ...(apiToken ? {Authorization: `Bearer ${apiToken}`} : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
       });
       if (!res.ok) return null;
@@ -461,6 +462,7 @@ export default function PaymentScreen() {
 
   const fetchStripeCredentials = async (restId, sucId) => {
     try {
+      await ensureToken();
       if (!restId || !sucId) return null;
       const hostBase = (apiHost || API_HOST_CONST).replace(/\/$/, '');
       const url = `${hostBase}/api/restaurantes/${encodeURIComponent(
@@ -472,7 +474,7 @@ export default function PaymentScreen() {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          ...(apiToken ? {Authorization: `Bearer ${apiToken}`} : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
       });
       if (!res.ok) {
@@ -616,6 +618,7 @@ export default function PaymentScreen() {
     }
 
     try {
+      await ensureToken();
       const hostBase = (apiHost || API_HOST_CONST).replace(/\/$/, '');
       const url = `${hostBase}/api/transacciones-pago/sucursal/${encodeURIComponent(
         String(sucursal_id),
@@ -625,7 +628,7 @@ export default function PaymentScreen() {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          ...(apiToken ? {Authorization: `Bearer ${apiToken}`} : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
       });
 
@@ -749,6 +752,11 @@ export default function PaymentScreen() {
     intervalMs = 3000,
   ) => {
     if (!transactionId) return {ok: false, reason: 'no_tx'};
+    try {
+      await ensureToken();
+    } catch (e) {
+      console.warn('pollSplitsUntilPaid ensureToken error', e);
+    }
     const hostBase = (apiHost || API_HOST_CONST).replace(/\/$/, '');
     const url = `${hostBase}/api/transacciones-pago/${encodeURIComponent(
       transactionId,
@@ -767,7 +775,7 @@ export default function PaymentScreen() {
           headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
-            ...(apiToken ? {Authorization: `Bearer ${apiToken}`} : {}),
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
           },
         });
         if (res.ok) {
@@ -880,6 +888,7 @@ export default function PaymentScreen() {
     let resolvedPaymentMethodId = 1;
     try {
       if (restaurante_id) {
+        await ensureToken();
         const hostBase = (apiHost || API_HOST_CONST).replace(/\/$/, '');
         const restUrl = `${hostBase}/api/restaurantes/${encodeURIComponent(
           restaurante_id,
@@ -889,7 +898,7 @@ export default function PaymentScreen() {
           headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
-            ...(apiToken ? {Authorization: `Bearer ${apiToken}`} : {}),
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
           },
         });
         if (restRes.ok) {
@@ -965,11 +974,12 @@ export default function PaymentScreen() {
     );
 
     try {
+      await ensureToken();
       const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(apiToken ? {Authorization: `Bearer ${apiToken}`} : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
         body: JSON.stringify(body),
       });
@@ -1205,6 +1215,7 @@ export default function PaymentScreen() {
 
   const fetchCardPaymentMethods = async (restId, sucId) => {
     try {
+      await ensureToken();
       if (!restId || !sucId)
         return {creditId: null, debitId: null, singleCardId: null, raw: []};
       const hostBase = (apiHost || API_HOST_CONST).replace(/\/$/, '');
@@ -1216,7 +1227,7 @@ export default function PaymentScreen() {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          ...(apiToken ? {Authorization: `Bearer ${apiToken}`} : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
       });
       if (!res.ok) {
@@ -1588,6 +1599,7 @@ export default function PaymentScreen() {
 
   async function fetchOpenpayCredentials(restId, sucId) {
     try {
+      await ensureToken();
       if (!restId || !sucId) return null;
       const hostBase = (apiHost || API_HOST_CONST).replace(/\/$/, '');
       const url = `${hostBase}/api/restaurantes/${encodeURIComponent(
@@ -1599,7 +1611,7 @@ export default function PaymentScreen() {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          ...(apiToken ? {Authorization: `Bearer ${apiToken}`} : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
       });
       if (!res.ok) {
@@ -1737,6 +1749,7 @@ export default function PaymentScreen() {
           userEmail,
           stripe_public_key: creds.public_key,
           payment_method_id: chosenId,
+          restaurantImage: restaurantImage,
         });
       } catch (err) {
         setLoadingKey(null);
@@ -1796,6 +1809,7 @@ export default function PaymentScreen() {
           userFullname,
           userEmail,
           payment_method_id: chosenId,
+          restaurantImage: restaurantImage,
         });
         return;
       } catch (err) {
@@ -1834,9 +1848,7 @@ export default function PaymentScreen() {
           style={styles.backBtn}
           onPress={() => navigation.goBack()}
           hitSlop={{top: 10, left: 10, right: 10, bottom: 10}}>
-          <Text style={[styles.backArrow, {fontSize: clamp(rf(9), 20, 36)}]}>
-            {'‹'}
-          </Text>
+          <Ionicons name="chevron-back" size={22} color={BLUE} />
         </TouchableOpacity>
         <Text style={[styles.title, {fontSize: titleFont}]}>Tu cuenta</Text>
         <Text
@@ -1907,38 +1919,24 @@ export default function PaymentScreen() {
 
             <View
               style={[styles.rightCol, {maxWidth: Math.round(width * 0.45)}]}>
-              <Text
-                style={[styles.totalLabel, {fontSize: clamp(rf(1.8), 12, 16)}]}>
-                Total
-              </Text>
+              <Text style={[styles.totalLabel, {}]}>Total</Text>
               <View style={styles.totalRow}>
                 <Text
-                  style={[styles.totalNumber, {fontSize: totalNumberFont}]}
+                  style={[
+                    styles.totalNumber,
+                    {fontSize: Math.max(22, Math.round(width * 0.07))},
+                  ]}
                   numberOfLines={1}
                   ellipsizeMode="tail">
                   {totalLabel}
                 </Text>
-                <Text
-                  style={[
-                    styles.totalCurrency,
-                    {fontSize: clamp(rf(1.8), 12, 16)},
-                  ]}>
+                <Text style={[styles.totalCurrency, {fontSize: 14}]}>
                   {moneda ?? 'MXN'}
                 </Text>
               </View>
               <View style={styles.rightThanks}>
-                <Text
-                  style={[
-                    styles.thanksText,
-                    {fontSize: clamp(rf(1.6), 12, 16)},
-                  ]}>
-                  Detalle
-                </Text>
-                <Text
-                  style={[
-                    styles.thanksSub,
-                    {fontSize: clamp(rf(1.4), 11, 14)},
-                  ]}>
+                <Text style={[styles.thanksText, {}]}>Detalle</Text>
+                <Text style={[styles.thanksSub, {}]}>
                   {items.length} {items.length === 1 ? 'item' : 'items'}
                 </Text>
               </View>

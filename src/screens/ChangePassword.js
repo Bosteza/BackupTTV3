@@ -1,4 +1,4 @@
-//working 9 mar
+//token implementation
 import React, {useState, useEffect, useRef} from 'react';
 import {
   View,
@@ -21,9 +21,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {Keyboard} from 'react-native';
 
+// AJUSTA LA RUTA SEGÚN DONDE ESTÉ ESTE ARCHIVO
+import {TOKEN, ensureToken} from '../auth/tokenManager';
+
 const API_BASE = 'https://api.tab-track.com/api/mobileapp';
-const API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 const PRIMARY = '#FEFFFFFF';
 const BLUE = '#0046ff';
 
@@ -132,6 +133,18 @@ export default function ChangePassword() {
       }, duration);
     });
   };
+  const getPasswordError = password => {
+    if (password.length < 8) {
+      return 'La contraseña debe tener al menos 8 caracteres';
+    }
+    if (!/[A-Z]/.test(password)) {
+      return 'La contraseña debe incluir al menos una mayúscula';
+    }
+    if (!/[0-9]/.test(password)) {
+      return 'La contraseña debe incluir al menos un número';
+    }
+    return null;
+  };
 
   useEffect(() => {
     const unsub = navigation.addListener('focus', () => {
@@ -162,10 +175,15 @@ export default function ChangePassword() {
     if (!oldPassword || !newPassword) {
       return showToast('Completa ambos campos');
     }
+    const passwordError = getPasswordError(newPassword);
+    if (passwordError) {
+      return showToast(passwordError);
+    }
 
     setLoading(true);
 
     try {
+      await ensureToken();
       const storedUserId = await AsyncStorage.getItem('user_id');
 
       if (!email && !storedUserId) {
@@ -180,7 +198,7 @@ export default function ChangePassword() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${API_TOKEN}`,
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
           },
           body: JSON.stringify({
             mail: email,
@@ -220,7 +238,7 @@ export default function ChangePassword() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${API_TOKEN}`,
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
           },
           body: JSON.stringify({
             password: oldPassword,

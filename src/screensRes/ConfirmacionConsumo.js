@@ -1,4 +1,4 @@
-// Works 9 marz
+// token
 import React, {useEffect, useState} from 'react';
 import {
   SafeAreaView,
@@ -14,9 +14,8 @@ import {
 import LinearGradient from 'react-native-linear-gradient';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useNavigation, useRoute} from '@react-navigation/native';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 const API_BASE_URL = 'https://api.residence.tab-track.com';
-const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 export default function ConfirmacionConsumo() {
   const navigation = useNavigation();
@@ -50,6 +49,8 @@ export default function ConfirmacionConsumo() {
       if (!edificioIdFromParams) return;
 
       try {
+        await ensureToken();
+
         const base = String(API_BASE_URL || '').replace(/\/$/, '');
         const url = `${base}/api/residence/edificios/${encodeURIComponent(
           String(edificioIdFromParams),
@@ -58,10 +59,8 @@ export default function ConfirmacionConsumo() {
         const headers = {
           Accept: 'application/json',
           'Content-Type': 'application/json',
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         };
-        if (API_AUTH_TOKEN && String(API_AUTH_TOKEN).trim()) {
-          headers.Authorization = `Bearer ${API_AUTH_TOKEN}`;
-        }
 
         const res = await fetch(url, {method: 'GET', headers});
         if (!mounted) return;
@@ -100,9 +99,61 @@ export default function ConfirmacionConsumo() {
   const formattedAmount =
     amount != null ? `$ ${Number(amount).toFixed(2)}` : '$ 0.00';
 
-  const formattedDate = date
-    ? new Date().toLocaleString()
-    : new Date(date).toLocaleString();
+  //No borrar jamás
+  const formattedDate = date => {
+    // If the API did not send a date, return an empty string
+    if (!date) return '';
+
+    // Parse naive timestamps like:
+    // "2026-04-01T20:37:55"
+    // "2026-04-01 20:37:55"
+    // We extract year, month, day, hour, minute, and optional seconds
+    const m = String(date).match(
+      /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/,
+    );
+
+    // If the value does not match the expected format, return empty
+    if (!m) return '';
+
+    const [, yyyy, mm, dd, hh, min, ss = '00'] = m;
+
+    // IMPORTANT:
+    // The backend is sending timestamps without timezone info.
+    // We are interpreting those values as UTC, not as device-local time.
+    //
+    // Example:
+    // "2026-04-01T20:37:55"
+    // is treated as:
+    // "2026-04-01 20:37:55 UTC"
+    //
+    // Then JavaScript converts that exact instant to the device local timezone
+    // when we later use getDate(), getHours(), getMinutes(), etc.
+    const d = new Date(
+      Date.UTC(
+        Number(yyyy),
+        Number(mm) - 1, // JS months are 0-based: January = 0
+        Number(dd),
+        Number(hh),
+        Number(min),
+        Number(ss),
+      ),
+    );
+
+    // Safety check in case the constructed date is invalid
+    if (isNaN(d.getTime())) return '';
+
+    // Format the date in the device's local timezone as:
+    // dd/mm/yy hh:mm
+    const outDD = String(d.getDate()).padStart(2, '0');
+    const outMM = String(d.getMonth() + 1).padStart(2, '0');
+    const outYY = String(d.getFullYear()).slice(-2);
+    const outHH = String(d.getHours()).padStart(2, '0');
+    const outMin = String(d.getMinutes()).padStart(2, '0');
+    const outSec = String(d.getSeconds()).padStart(2, '0');
+
+    return `${outDD}/${outMM}/${outYY} ${outHH}:${outMin}:${outSec}`;
+  };
+
   const txLabel = transactionId ?? '';
 
   return (
@@ -124,7 +175,7 @@ export default function ConfirmacionConsumo() {
         <SafeAreaView style={styles.topSafeArea}>
           {/* HEADER */}
           <View style={styles.header}>
-            <TouchableOpacity
+            {/*    <TouchableOpacity
               onPress={() => navigation.goBack()}
               style={styles.headerBtn}
               accessibilityLabel="Volver">
@@ -133,7 +184,7 @@ export default function ConfirmacionConsumo() {
                 size={styles.iconSize}
                 color="#fff"
               />
-            </TouchableOpacity>
+            </TouchableOpacity> */}
 
             <Text style={styles.headerTitle} numberOfLines={1}>
               Confirmación de consumo
@@ -165,7 +216,7 @@ export default function ConfirmacionConsumo() {
               <View style={styles.miniInfoCol}>
                 <Text style={styles.miniLabel}>Fecha</Text>
                 <Text style={styles.miniValue} numberOfLines={2}>
-                  {formattedDate}
+                  {formattedDate(date)}
                 </Text>
               </View>
 

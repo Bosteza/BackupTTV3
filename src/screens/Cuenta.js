@@ -1,4 +1,4 @@
-//Working 2 april
+//token
 import React, {useState, useEffect, useRef} from 'react';
 import {
   SafeAreaView,
@@ -20,10 +20,9 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import {CommonActions} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const API_URL = 'https://api.tab-track.com/api/mobileapp/usuarios';
-const API_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 const VERIF_URL =
   'https://api.tab-track.com/api/mobileapp/usuarios/verification-codes';
 const PRIMARY = '#0046ff';
@@ -133,11 +132,12 @@ export default function Cuenta({navigation}) {
 
     setLoading(true);
     try {
+      await ensureToken();
       const res = await fetch(API_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${API_TOKEN}`,
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
         body: JSON.stringify({
           nombre,
@@ -166,11 +166,12 @@ export default function Cuenta({navigation}) {
 
         let sendOk = false;
         try {
+          await ensureToken();
           const sendRes = await fetch(VERIF_URL, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              Authorization: `Bearer ${API_TOKEN}`,
+              ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
             },
             body: JSON.stringify({email: mail}),
           });

@@ -1,4 +1,4 @@
-// CuentaResidence.js ios works 7april
+//token
 import React, {useEffect, useState, useCallback, useRef, useMemo} from 'react';
 import {
   SafeAreaView,
@@ -25,10 +25,8 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 const API_BASE_URL = 'https://api.residence.tab-track.com';
-const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const VISITS_STORAGE_KEY = 'user_visits';
 const PENDING_VISITS_KEY = 'pending_visits';
@@ -181,6 +179,21 @@ const buildPendingPaymentObj = (saleKey, itemsArr, amount) => {
   }
 };
 
+const getRestauranteIdFromResolveJson = json => {
+  const candidates = [
+    json?.mesa?.restaurante_id,
+    json?.restaurante?.id,
+    json?.restaurante_id,
+    json?.open_consumption?.restaurante_id,
+    json?.open_consumption?.restaurante?.id,
+  ];
+
+  const found = candidates.find(
+    v => v !== null && v !== undefined && String(v).trim() !== '',
+  );
+  return found !== undefined ? found : null;
+};
+
 export default function CuentaResidence() {
   const navigation = useNavigation();
   const route = useRoute();
@@ -220,11 +233,16 @@ export default function CuentaResidence() {
 
   const [noSaleModalVisible, setNoSaleModalVisible] = useState(false);
   const [noSaleModalMessage, setNoSaleModalMessage] = useState('');
+
   const [accountOpening, setAccountOpening] = useState(false);
   const [accountOpened, setAccountOpened] = useState(false);
   const [canOpenAccount, setCanOpenAccount] = useState(false);
   const [approveLoading, setApproveLoading] = useState(false);
+
   const [discountAmount, setDiscountAmount] = useState(0);
+  const [validationBannerVisible, setValidationBannerVisible] = useState(false);
+  const [startConsumptionModalVisible, setStartConsumptionModalVisible] =
+    useState(false);
   const isMountedRef = useRef(true);
   useEffect(() => {
     isMountedRef.current = true;
@@ -234,6 +252,61 @@ export default function CuentaResidence() {
   }, []);
 
   const suppressNoOpenSaleRef = useRef(false);
+  const validationBannerKey = useMemo(() => {
+    if (!qr) return null;
+    return `residence_validation_banner_state_${String(qr).trim()}`;
+  }, [qr]);
+
+  const persistValidationBannerState = useCallback(
+    async state => {
+      try {
+        if (!validationBannerKey) return;
+
+        if (!state) {
+          await AsyncStorage.removeItem(validationBannerKey);
+          return;
+        }
+
+        await AsyncStorage.setItem(
+          validationBannerKey,
+          JSON.stringify({
+            started: !!state.started,
+            visible: !!state.visible,
+            updatedAt: new Date().toISOString(),
+          }),
+        );
+      } catch (e) {
+        console.warn('persistValidationBannerState error', e);
+      }
+    },
+    [validationBannerKey],
+  );
+
+  const loadValidationBannerState = useCallback(async () => {
+    try {
+      if (!validationBannerKey) return;
+
+      const raw = await AsyncStorage.getItem(validationBannerKey);
+      if (!raw) {
+        if (isMountedRef.current) setValidationBannerVisible(false);
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(raw);
+        if (isMountedRef.current) {
+          setValidationBannerVisible(
+            parsed?.started === true && parsed?.visible === true,
+          );
+        }
+      } catch (e) {
+        if (isMountedRef.current) setValidationBannerVisible(false);
+      }
+    } catch (e) {
+      console.warn('loadValidationBannerState error', e);
+      if (isMountedRef.current) setValidationBannerVisible(false);
+    }
+  }, [validationBannerKey]);
 
   const openErrorModal = m => {
     setErrorModalMessage(m || 'Ocurrió un error');
@@ -256,22 +329,119 @@ export default function CuentaResidence() {
     }
   };
 
-  // NOTA: quité approvingModalVisible porque ya no vamos a mostrar la modal "Aprobando consumo"
+  const fetchRestaurantImage = useCallback(
+    async (edificioIdToSearch, restauranteIdToSearch) => {
+      try {
+        await ensureToken();
+        const edificioId =
+          edificioIdToSearch !== null && edificioIdToSearch !== undefined
+            ? String(edificioIdToSearch).trim()
+            : '';
+        const targetRestauranteId =
+          restauranteIdToSearch !== null && restauranteIdToSearch !== undefined
+            ? String(restauranteIdToSearch).trim()
+            : '';
 
-  const applyResolveJsonToState = useCallback(json => {
+        console.log(
+          '[CuentaResidence] fetchRestaurantImage -> edificioId:',
+          edificioId,
+          'restauranteId:',
+          targetRestauranteId,
+        );
+
+        if (!edificioId) {
+          console.log(
+            '[CuentaResidence] Falta edificioId. No se consulta imagen.',
+          );
+          if (isMountedRef.current) setRestaurantImageUri(null);
+          return;
+        }
+
+        if (!targetRestauranteId) {
+          console.log(
+            '[CuentaResidence] Falta restauranteId. No se consulta imagen.',
+          );
+          if (isMountedRef.current) setRestaurantImageUri(null);
+          return;
+        }
+
+        const url = `${API_BASE_URL.replace(
+          /\/$/,
+          '',
+        )}/api/residence/edificios/${encodeURIComponent(
+          edificioId,
+        )}/restaurantes`;
+        console.log('[CuentaResidence] Consultando imagen en:', url);
+
+        const headers = {Accept: 'application/json'};
+        if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
+
+        const res = await fetch(url, {
+          method: 'GET',
+          headers,
+        });
+
+        console.log(
+          '[CuentaResidence] Status consulta restaurantes:',
+          res.status,
+        );
+
+        if (!res.ok) {
+          console.log(
+            '[CuentaResidence] La consulta de restaurantes falló. Se usa imagen por defecto.',
+          );
+          if (isMountedRef.current) setRestaurantImageUri(null);
+          return;
+        }
+
+        const json = await res.json();
+        console.log('[CuentaResidence] Respuesta completa restaurantes:', json);
+
+        const restaurantes = Array.isArray(json?.restaurantes)
+          ? json.restaurantes
+          : [];
+        const found = restaurantes.find(
+          r => String(r?.id) === targetRestauranteId,
+        );
+
+        console.log('[CuentaResidence] Restaurante encontrado:', found);
+
+        const imageUrl =
+          found?.imagen_perfil_url && String(found.imagen_perfil_url).trim()
+            ? String(found.imagen_perfil_url).trim()
+            : null;
+
+        if (imageUrl) {
+          console.log(
+            '[CuentaResidence] imagen_perfil_url asignada:',
+            imageUrl,
+          );
+        } else {
+          console.log(
+            '[CuentaResidence] No hay imagen_perfil_url o vino null. Se usa imagen por defecto.',
+          );
+        }
+
+        if (isMountedRef.current) {
+          setRestaurantImageUri(imageUrl);
+        }
+      } catch (err) {
+        console.warn('fetchRestaurantImage error', err);
+        console.log(
+          '[CuentaResidence] Error consultando imagen. Se usa imagen por defecto.',
+        );
+        if (isMountedRef.current) setRestaurantImageUri(null);
+      }
+    },
+    [],
+  );
+
+  const applyResolveJsonToState = useCallback((json, options = {}) => {
     try {
-      const oc = json.open_consumption ?? null;
+      const {deferOpenAccountState = false} = options;
+      console.log('[CuentaResidence] JSON resolve QR recibido:', json);
 
-      const possibleImage =
-        json.imagen_banner_url ??
-        json.imagen_url ??
-        json.imagen ??
-        json.image_url ??
-        json.image ??
-        null;
-      if (possibleImage && String(possibleImage).trim())
-        setRestaurantImageUri(String(possibleImage).trim());
-      else setRestaurantImageUri(null);
+      const oc = json.open_consumption ?? null;
 
       const mesaObj = json.mesa ?? (oc && oc.mesa) ?? null;
       const mesaNumero =
@@ -284,11 +454,23 @@ export default function CuentaResidence() {
 
       setMesero((oc && oc.mesero) ?? json.mesero ?? null);
       setMoneda((oc && oc.moneda) ?? json.moneda ?? 'MXN');
-      setRestauranteId(
-        (json.restaurante && json.restaurante.id) ??
-          json.restaurante_id ??
-          null,
+
+      const resolvedRestauranteId = getRestauranteIdFromResolveJson(json);
+      console.log(
+        '[CuentaResidence] restauranteId desde resolve:',
+        resolvedRestauranteId,
+        {
+          mesa_restaurante_id: json?.mesa?.restaurante_id,
+          restaurante_obj_id: json?.restaurante?.id,
+          restaurante_id: json?.restaurante_id,
+          open_consumption_restaurante_id:
+            json?.open_consumption?.restaurante_id,
+          open_consumption_restaurante_obj_id:
+            json?.open_consumption?.restaurante?.id,
+        },
       );
+
+      setRestauranteId(resolvedRestauranteId ?? null);
       setSucursalId(json.sucursal_id ?? null);
 
       const resolvedSaleId =
@@ -408,27 +590,37 @@ export default function CuentaResidence() {
         setCanOpenAccount(!!canOpen);
         setAccountOpened(false);
       } else if (aperturaStatusRaw && aperturaStatusRaw.includes('OPEN')) {
-        setAccountOpened(true);
-        setCanOpenAccount(false);
+        if (!deferOpenAccountState) {
+          setAccountOpened(true);
+          setCanOpenAccount(false);
+        }
       } else {
         setCanOpenAccount(!!canOpen);
         setAccountOpened(false);
       }
+
+      return {
+        restauranteId: resolvedRestauranteId,
+        aperturaStatusRaw,
+      };
     } catch (err) {
       console.warn('applyResolveJsonToState error', err);
+      return {restauranteId: null, aperturaStatusRaw: null};
     }
   }, []);
 
   const fetchConsumo = useCallback(
-    async (opts = {showLoading: true}) => {
+    async (opts = {showLoading: true, deferOpenAccountState: false}) => {
       if (!qr) {
         openErrorModal('QR no encontrado. Vuelve a escanear.');
         if (isMountedRef.current) setLoading(false);
         return;
       }
+
       if (opts.showLoading && isMountedRef.current) setLoading(true);
 
       try {
+        await ensureToken();
         let usuarioAppId = null;
         try {
           usuarioAppId = await AsyncStorage.getItem('user_usuario_app_id');
@@ -436,6 +628,7 @@ export default function CuentaResidence() {
         } catch (e) {
           usuarioAppId = null;
         }
+
         if (!usuarioAppId) {
           openErrorModal('Usuario no identificado. Inicia sesión de nuevo.');
           if (isMountedRef.current) setLoading(false);
@@ -446,19 +639,24 @@ export default function CuentaResidence() {
           /\/$/,
           '',
         )}/api/mobileapp/residence/qr/resolve`;
+        console.log('[CuentaResidence] Consultando QR resolve:', {
+          resolveUrl,
+          qr,
+          usuarioAppId,
+        });
+
         const res = await fetch(resolveUrl, {
           method: 'POST',
           headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
-            Authorization: API_AUTH_TOKEN
-              ? `Bearer ${API_AUTH_TOKEN}`
-              : undefined,
+            ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
           },
           body: JSON.stringify({qr: qr, usuario_app_id: usuarioAppId}),
         });
 
         if (!isMountedRef.current) return;
+
         if (!res.ok) {
           let txt = `No se pudo resolver el QR (HTTP ${res.status}).`;
           try {
@@ -472,6 +670,7 @@ export default function CuentaResidence() {
         }
 
         const json = await res.json();
+        console.log('[CuentaResidence] Respuesta de QR resolve:', json);
 
         const apertura = json.apertura ?? null;
         const aperturaStatus = apertura?.status
@@ -490,7 +689,30 @@ export default function CuentaResidence() {
           return;
         }
 
-        applyResolveJsonToState(json);
+        const {restauranteId: resolvedRestaurantIdFromJson} =
+          applyResolveJsonToState(json, {
+            deferOpenAccountState: !!opts.deferOpenAccountState,
+          });
+
+        let edificioId = null;
+        try {
+          const rawEdificioId = await AsyncStorage.getItem(
+            'user_edificio_id_actual',
+          );
+          edificioId =
+            rawEdificioId !== null && rawEdificioId !== undefined
+              ? String(rawEdificioId).trim()
+              : '';
+        } catch (e) {
+          edificioId = '';
+        }
+
+        console.log('[CuentaResidence] Datos para imagen desde resolve:', {
+          edificioId,
+          restauranteId: resolvedRestaurantIdFromJson,
+        });
+
+        await fetchRestaurantImage(edificioId, resolvedRestaurantIdFromJson);
       } catch (err) {
         console.warn('fetchConsumo error', err);
         openErrorModal('No se pudo consultar el consumo. Revisa tu conexión.');
@@ -498,26 +720,37 @@ export default function CuentaResidence() {
         if (isMountedRef.current) setLoading(false);
       }
     },
-    [qr, applyResolveJsonToState, navigation],
+    [qr, applyResolveJsonToState, fetchRestaurantImage],
   );
 
   useEffect(() => {
+    loadValidationBannerState();
     fetchConsumo({showLoading: true});
-  }, [qr]);
+  }, [qr, loadValidationBannerState, fetchConsumo]);
 
   useFocusEffect(
     useCallback(() => {
+      loadValidationBannerState();
       fetchConsumo({showLoading: false});
-    }, [fetchConsumo]),
+    }, [loadValidationBannerState, fetchConsumo]),
   );
 
-  const handleStartConsumption = async () => {
+  const handleCloseStartModal = useCallback(async () => {
+    setStartConsumptionModalVisible(false);
+    setAccountOpened(true);
+    setCanOpenAccount(false);
+    setValidationBannerVisible(true);
+    await persistValidationBannerState({started: true, visible: true});
+  }, [persistValidationBannerState]);
+  const handleStartConsumptionConfirmed = async () => {
     if (!qr) {
       openErrorModal('QR no disponible.');
       return;
     }
+    if (accountOpening || approveLoading) return;
     setAccountOpening(true);
     try {
+      await ensureToken();
       let usuarioAppId = null;
       try {
         usuarioAppId = await AsyncStorage.getItem('user_usuario_app_id');
@@ -540,9 +773,7 @@ export default function CuentaResidence() {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          Authorization: API_AUTH_TOKEN
-            ? `Bearer ${API_AUTH_TOKEN}`
-            : undefined,
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
         body: JSON.stringify({qr: qr, usuario_app_id: usuarioAppId}),
       });
@@ -560,13 +791,39 @@ export default function CuentaResidence() {
       }
 
       const json = await res.json();
-      applyResolveJsonToState(json);
+      console.log('[CuentaResidence] Respuesta open-account:', json);
+
+      const resolvedData = applyResolveJsonToState(json, {
+        deferOpenAccountState: true,
+      });
+
+      let edificioId = null;
+      try {
+        const rawEdificioId = await AsyncStorage.getItem(
+          'user_edificio_id_actual',
+        );
+        edificioId =
+          rawEdificioId !== null && rawEdificioId !== undefined
+            ? String(rawEdificioId).trim()
+            : '';
+      } catch (e) {
+        edificioId = '';
+      }
+
+      console.log('[CuentaResidence] Datos para imagen desde open-account:', {
+        edificioId,
+        restauranteId: resolvedData?.restauranteId ?? null,
+      });
+
+      await fetchRestaurantImage(
+        edificioId,
+        resolvedData?.restauranteId ?? null,
+      );
 
       const aperturaStatus = json.apertura?.status
         ? String(json.apertura.status).toUpperCase()
         : null;
       if (aperturaStatus && aperturaStatus.includes('OPEN')) {
-        setAccountOpened(true);
         const resolvedSaleId =
           (json.open_consumption && json.open_consumption.sale_id) ??
           json.external_sale_id ??
@@ -574,6 +831,13 @@ export default function CuentaResidence() {
           json.venta_id ??
           null;
         if (resolvedSaleId) setSaleId(String(resolvedSaleId));
+        try {
+          await fetchConsumo({showLoading: false, deferOpenAccountState: true});
+        } catch (e) {
+          /* noop */
+        }
+
+        setStartConsumptionModalVisible(true);
       } else {
         if (aperturaStatus === 'NO_OPEN_SALE') {
           openNoSaleModal('El servidor indicó que no hay cuenta disponible.');
@@ -582,18 +846,16 @@ export default function CuentaResidence() {
         }
       }
 
-      try {
-        await fetchConsumo({showLoading: false});
-      } catch (e) {
-        /* noop */
-      }
-
       setAccountOpening(false);
     } catch (err) {
       console.warn('handleStartConsumption error', err);
       Alert.alert('Error', 'No se pudo iniciar consumo. Revisa tu conexión.');
       setAccountOpening(false);
     }
+  };
+  const handleStartConsumption = async () => {
+    if (accountOpening || approveLoading) return;
+    await handleStartConsumptionConfirmed();
   };
 
   const handleApproveConsumption = async () => {
@@ -611,6 +873,7 @@ export default function CuentaResidence() {
 
     setApproveLoading(true);
     try {
+      await ensureToken();
       let usuarioAppId = null;
       try {
         usuarioAppId = await AsyncStorage.getItem('user_usuario_app_id');
@@ -635,9 +898,7 @@ export default function CuentaResidence() {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          Authorization: API_AUTH_TOKEN
-            ? `Bearer ${API_AUTH_TOKEN}`
-            : undefined,
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
         body: JSON.stringify({qr: qr, usuario_app_id: usuarioAppId}),
       });
@@ -655,8 +916,8 @@ export default function CuentaResidence() {
       }
 
       const json = await res.json();
+      console.log('[CuentaResidence] Respuesta approve:', json);
 
-      // Guardamos visita como antes
       try {
         if (json && json.sale_id) {
           const visitToSave = {
@@ -676,6 +937,7 @@ export default function CuentaResidence() {
       } catch (e) {
         console.warn('Could not save visit after approve', e);
       }
+
       try {
         const amountVal = Number(json.total ?? totalConsumo) || 0;
         const notifId = `notif_${Date.now()}_${Math.floor(
@@ -725,8 +987,11 @@ export default function CuentaResidence() {
       } catch (e) {
         console.warn('Error creando notificación tras aprobar consumo', e);
       }
+      try {
+        await persistValidationBannerState(null);
+        setValidationBannerVisible(false);
+      } catch (e) {}
 
-      // EN LUGAR DE MOSTRAR MODAL: navegar a la pantalla de confirmación de consumo
       try {
         navigation.navigate('ConfirmacionConsumo', {
           amount: Number(json.total ?? totalConsumo) || 0,
@@ -736,11 +1001,9 @@ export default function CuentaResidence() {
           restauranteId: json.restaurante_id ?? restauranteId,
           sucursalId: json.sucursal_id ?? sucursalId,
           rawResponse: json,
-          // ADICIÓN: envío de edificio_id hacia la pantalla de confirmación
           edificioId: json.edificio_id ?? json.edificioId ?? null,
         });
       } catch (e) {
-        // fallback: volver a la pantalla de QR si la navegación falla
         try {
           navigation.navigate('QrResidence');
         } catch (er) {}
@@ -873,11 +1136,11 @@ export default function CuentaResidence() {
                 </Text>
               </TouchableOpacity>
 
-              {/*   <TouchableOpacity
+              <TouchableOpacity
                 style={[styles.modalBtnGhost]}
                 onPress={() => setErrorModalVisible(false)}>
                 <Text style={styles.modalBtnGhostText}>Cerrar</Text>
-              </TouchableOpacity> */}
+              </TouchableOpacity>
             </View>
           </LinearGradient>
         </View>
@@ -902,6 +1165,50 @@ export default function CuentaResidence() {
               onPress={closeNoSaleModal}
               activeOpacity={0.8}>
               <Text style={styles.noSaleBtnText}>Aceptar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      <Modal
+        visible={startConsumptionModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseStartModal}>
+        <View style={styles.startModalBackdrop}>
+          <View
+            style={[
+              styles.startModalBox,
+              {width: Math.min(layoutWidth - 36, wp(88))},
+            ]}>
+            <TouchableOpacity
+              style={styles.startModalCloseBtn}
+              onPress={handleCloseStartModal}
+              activeOpacity={0.8}
+              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+              <Ionicons name="close" size={20} color="#6b7280" />
+            </TouchableOpacity>
+
+            <View style={styles.startModalIconWrap}>
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={34}
+                color="#0046ff"
+              />
+            </View>
+
+            <Text style={styles.startModalTitle}>¿Validar consumo?</Text>
+            <Text style={styles.startModalMessage}>
+              Se agregará el monto a tu consumo del mes, ¿deseas validar?
+            </Text>
+
+            <TouchableOpacity
+              style={styles.startModalAcceptBtn}
+              onPress={async () => {
+                setStartConsumptionModalVisible(false);
+                await handleApproveConsumption();
+              }}
+              activeOpacity={0.9}>
+              <Text style={styles.startModalAcceptBtnText}>Validar</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -976,7 +1283,7 @@ export default function CuentaResidence() {
                     />
                   ) : (
                     <Image
-                      source={require('../../assets/images/restaurante.jpeg')}
+                      source={require('../../assets/images/LogoResB.png')}
                       style={[
                         styles.restaurantImage,
                         {
@@ -1211,14 +1518,31 @@ export default function CuentaResidence() {
               </View>
             </View>
           </View>
+          {validationBannerVisible ? (
+            <View
+              style={[
+                styles.validationInlineBox,
+                {width: Math.min(layoutWidth * 0.92, layoutWidth - 10)},
+              ]}>
+              <Text
+                style={[
+                  styles.validationInlineText,
+                  {fontSize: clamp(rf(2.9), 13, 16)},
+                ]}>
+                Se agregará el monto a tu consumo del mes,{'\n'}¿deseas validar?
+              </Text>
+            </View>
+          ) : null}
 
           {canOpenAccount || accountOpened ? (
             <TouchableOpacity
               style={[
                 styles.smallPrimaryButton,
-                {width: layoutWidth, paddingVertical: Math.max(10, hp(1.2))},
-                // si está abierto: boton verde (como pediste anteriormente)
-                accountOpened ? {backgroundColor: '#16a34a'} : null,
+                {
+                  width: layoutWidth,
+                  paddingVertical: Math.max(10, hp(1.2)),
+                  backgroundColor: accountOpened ? '#16a34a' : '#0046ff',
+                },
                 accountOpening || approveLoading ? {opacity: 0.75} : null,
               ]}
               activeOpacity={0.85}
@@ -1235,13 +1559,9 @@ export default function CuentaResidence() {
                 <Text
                   style={[
                     styles.smallPrimaryButtonText,
-                    {
-                      fontSize: clamp(rf(3.2), 14, 16),
-                    },
+                    {fontSize: clamp(rf(3.2), 14, 16), textAlign: 'center'},
                   ]}>
-                  {accountOpened
-                    ? 'Validar consumo'
-                    : 'Empezar consumo - Es necesario hacer una segunda verificacion'}
+                  {accountOpened ? 'Validar consumo' : 'Aprobar consumo'}
                 </Text>
               )}
             </TouchableOpacity>
@@ -1608,5 +1928,92 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 16,
     textAlign: 'center',
+  },
+  validationInlineBox: {
+    marginTop: 12,
+    backgroundColor: '#d9d9d9',
+    borderRadius: 28,
+    borderWidth: 1.5,
+    borderColor: '#2f2f2f',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+  },
+  validationInlineText: {
+    color: '#3a3a3a',
+    textAlign: 'center',
+    lineHeight: 18,
+    fontWeight: '400',
+  },
+  startModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.48)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  startModalBox: {
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    paddingVertical: 20,
+    paddingHorizontal: 18,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 22,
+    shadowOffset: {width: 0, height: 10},
+    elevation: 14,
+    overflow: 'hidden',
+  },
+  startModalCloseBtn: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 3,
+  },
+  startModalIconWrap: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: '#eff6ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+    marginTop: 6,
+  },
+  startModalTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#111',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  startModalMessage: {
+    fontSize: 15,
+    color: '#111',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 18,
+  },
+  startModalAcceptBtn: {
+    width: '100%',
+    backgroundColor: '#0046ff',
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  startModalAcceptBtnText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 15,
   },
 });

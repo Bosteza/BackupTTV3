@@ -1,4 +1,4 @@
-//GOOD
+//Token
 import React, {useState, useEffect, useRef} from 'react';
 import {
   View,
@@ -27,19 +27,29 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Geolocation from 'react-native-geolocation-service';
 import {check, request, PERMISSIONS, RESULTS} from 'react-native-permissions';
 
+import {TOKEN, ensureToken} from '../auth/tokenManager';
+
 const logo = require('../../assets/images/logo.png');
 const defaultImage = require('../../assets/images/restaurante.jpeg');
 
 const API_URL = 'https://api.tab-track.com/api/restaurantes';
 const API_URL_2 = 'https://api.tab-track.com/api/encuestas';
 const SURVEY_ID = '8916180a-95fd-46af-bde4-60635cc7e1ab';
-const TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 const FAVORITES_OBJS_KEY = 'favorites_objs';
 const GLOBAL_FAVORITES_OBJS_KEY = 'favorites_objs';
 
 const STAR_COLOR = '#ffbf00';
 const BLUE = '#0046ff';
+
+const getAuthHeaders = (extra = {}) => {
+  const base = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    ...extra,
+  };
+  if (TOKEN && TOKEN.trim()) base.Authorization = `Bearer ${TOKEN}`;
+  return base;
+};
 
 const getUserIdentifier = async () => {
   try {
@@ -139,15 +149,13 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 const fetchSurveyAvgForSucursal = async sucursalId => {
   if (!sucursalId) return 0.0;
   try {
+    await ensureToken();
     const url = `${API_URL_2.replace(/\/$/, '')}/${encodeURIComponent(
       SURVEY_ID,
     )}/reportes?sucursal_id=${encodeURIComponent(sucursalId)}`;
     const res = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
-      },
+      headers: getAuthHeaders(),
     });
     if (!res.ok) {
       console.warn('fetchSurveyAvgForSucursal - http status', res.status, url);
@@ -184,6 +192,7 @@ const fetchSurveyAvgForSucursal = async sucursalId => {
 /* ------------------ fetchAllRestaurants (igual que en tu versión) ------------------ */
 const fetchAllRestaurants = async () => {
   try {
+    await ensureToken();
     const perPage = 100;
     let page = 1;
     const maxPages = 20;
@@ -195,20 +204,14 @@ const fetchAllRestaurants = async () => {
 
       const res = await fetch(url, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
-        },
+        headers: getAuthHeaders(),
       });
 
       if (!res.ok) {
         if (page === 1) {
           const res2 = await fetch(API_URL, {
             method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
-            },
+            headers: getAuthHeaders(),
           });
           if (!res2.ok) throw new Error(`HTTP ${res2.status}`);
           const json2 = await res2.json().catch(() => null);
@@ -407,6 +410,7 @@ export default function RestaurantsScreen() {
     (async () => {
       try {
         setLoading(true);
+        await ensureToken();
 
         const list = await fetchAllRestaurants();
         if (!Array.isArray(list)) {
@@ -418,14 +422,12 @@ export default function RestaurantsScreen() {
         const restDetailPromises = list.map(async rest => {
           try {
             if (!rest || rest.id === undefined || rest.id === null) return;
+            await ensureToken();
             const restUrl = `${API_URL.replace(/\/$/, '')}/${encodeURIComponent(
               rest.id,
             )}`;
             const rr = await fetch(restUrl, {
-              headers: {
-                Authorization: TOKEN ? `Bearer ${TOKEN}` : undefined,
-                'Content-Type': 'application/json',
-              },
+              headers: getAuthHeaders(),
             });
             if (!rr.ok) return;
             const rjson = await rr.json();
@@ -444,14 +446,12 @@ export default function RestaurantsScreen() {
         const branchPromises = list.map(async rest => {
           try {
             if (!rest || rest.id === undefined || rest.id === null) return [];
+            await ensureToken();
             const url = `${API_URL.replace(/\/$/, '')}/${encodeURIComponent(
               rest.id,
             )}/sucursales`;
             const r = await fetch(url, {
-              headers: {
-                Authorization: TOKEN ? `Bearer ${TOKEN}` : undefined,
-                'Content-Type': 'application/json',
-              },
+              headers: getAuthHeaders(),
             });
 
             if (!r.ok) {

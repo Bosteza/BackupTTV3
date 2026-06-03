@@ -1,4 +1,4 @@
-//9 marz
+//token
 import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   ScrollView,
@@ -26,12 +26,11 @@ import Toast from 'react-native-root-toast';
 import {launchImageLibrary} from 'react-native-image-picker';
 import {useFocusEffect} from '@react-navigation/native';
 import LinearGradient from 'react-native-linear-gradient';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const staticWidth = Dimensions.get('window').width;
 
 const API_URL = 'https://api.tab-track.com';
-const TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 export default function ProfileScreen({navigation}) {
   const [showNotifications, setShowNotifications] = useState(false);
@@ -406,6 +405,7 @@ export default function ProfileScreen({navigation}) {
 
   async function fetchTodayNotificationsOnce() {
     try {
+      await ensureToken();
       const email =
         emailRef.current ?? (await AsyncStorage.getItem('user_email'));
       if (!email) return;
@@ -455,6 +455,25 @@ export default function ProfileScreen({navigation}) {
           venta?.ventaId ??
           venta?.saleId ??
           null;
+        const ventaRestaurantId =
+          venta?.restaurante_id ??
+          venta?.restaurant_id ??
+          venta?.restauranteId ??
+          venta?.restaurantId ??
+          null;
+        const ventaBranchId =
+          venta?.sucursal_id ??
+          venta?.sucursalId ??
+          venta?.branch_id ??
+          venta?.branchId ??
+          null;
+        const ventaRestaurantName =
+          venta?.nombre_restaurante ??
+          venta?.restaurantName ??
+          venta?.restaurante ??
+          '';
+        const ventaBranchName =
+          venta?.nombre_sucursal ?? venta?.branchName ?? venta?.sucursal ?? '';
 
         const pagos = Array.isArray(venta?.pagos) ? venta.pagos : [];
         if (
@@ -487,25 +506,24 @@ export default function ProfileScreen({navigation}) {
                 item?.fecha_creacion ??
                 venta?.fecha_cierre_venta ??
                 new Date().toISOString();
+
               const parsed = parseApiDate(rawDate);
               const dateIso = parsed
                 ? parsed.toISOString()
                 : new Date().toISOString();
-              const branch =
-                venta?.nombre_sucursal ??
-                venta?.nombre_restaurante ??
-                item?.nombre_sucursal ??
-                '';
+              const branch = ventaBranchName || item?.nombre_sucursal || '';
 
               const branchId =
-                venta?.sucursal_id ??
-                venta?.sucursalId ??
-                venta?.branch_id ??
-                venta?.branchId ??
+                ventaBranchId ??
                 item?.sucursal_id ??
                 item?.sucursalId ??
                 item?.branch_id ??
                 item?.branchId ??
+                null;
+              const restaurantId =
+                ventaRestaurantId ??
+                item?.restaurante_id ??
+                item?.restaurant_id ??
                 null;
 
               const splitsUrl =
@@ -525,7 +543,10 @@ export default function ProfileScreen({navigation}) {
                 }),
                 amount: Number(amount || 0),
                 branch: branch || '',
+                branchName: branch || '',
                 branchId: branchId ?? null,
+                restaurantId: restaurantId ?? null,
+                restaurantName: ventaRestaurantName || '',
                 date: dateIso,
                 saleId,
                 url: splitsUrl,
@@ -573,21 +594,19 @@ export default function ProfileScreen({navigation}) {
           const dateIso = parsed
             ? parsed.toISOString()
             : new Date().toISOString();
-          const branch =
-            venta?.nombre_sucursal ??
-            venta?.nombre_restaurante ??
-            pago?.nombre_sucursal ??
-            '';
+          const branch = ventaBranchName || pago?.nombre_sucursal || '';
 
           const branchId =
-            venta?.sucursal_id ??
-            venta?.sucursalId ??
-            venta?.branch_id ??
-            venta?.branchId ??
+            ventaBranchId ??
             pago?.sucursal_id ??
             pago?.sucursalId ??
             pago?.branch_id ??
             pago?.branchId ??
+            null;
+          const restaurantId =
+            ventaRestaurantId ??
+            pago?.restaurante_id ??
+            pago?.restaurant_id ??
             null;
 
           const splitsUrl =
@@ -607,7 +626,10 @@ export default function ProfileScreen({navigation}) {
             }),
             amount: Number(amount || 0),
             branch: branch || '',
+            branchName: branch || '',
             branchId: branchId ?? null,
+            restaurantId: restaurantId ?? null,
+            restaurantName: ventaRestaurantName || '',
             date: dateIso,
             saleId,
             url: splitsUrl,
@@ -855,19 +877,205 @@ export default function ProfileScreen({navigation}) {
     return false;
   }
 
-  // IMPORTANT: No network enrichment when missing restaurant data.
-  // If we already have restaurantImage or banner in visit, use it.
-  // Otherwise *do not* call endpoints to try to fetch logos — user requested no extra API calls.
-  async function enrichVisitWithBranchLogo(visit) {
+  // IMPORTANTE: ahora sí intenta completar nombre/logo del restaurante y sucursal
+  // usando restaurante_id + sucursal_id del payload o del caché.
+  function cleanName(v) {
+    const s = String(v ?? '').trim();
+    if (!s) return '';
+    if (s.toLowerCase() === 'restaurante') return '';
+    return s;
+  }
+
+  async function enrichVisitWithBranchLogo(visit, fallbackMeta = {}) {
     try {
       if (!visit) return visit;
-      // If visit already has images, ensure they are cache-busted for fresh load
+
+      await ensureToken();
+
+      const restauranteId =
+        visit?.restaurante_id ??
+        visit?.restaurant_id ??
+        visit?.restauranteId ??
+        visit?.restaurantId ??
+        fallbackMeta?.restauranteId ??
+        fallbackMeta?.restaurantId ??
+        null;
+      const sucursalId =
+        visit?.sucursal_id ??
+        visit?.branch_id ??
+        visit?.sucursalId ??
+        visit?.branchId ??
+        fallbackMeta?.sucursalId ??
+        fallbackMeta?.branchId ??
+        null;
+
+      let restaurantName =
+        visit?.restaurantName ??
+        visit?.nombre_restaurante ??
+        fallbackMeta?.restaurantName ??
+        '';
+      let branchName =
+        visit?.branchName ??
+        visit?.nombre_sucursal ??
+        fallbackMeta?.branchName ??
+        '';
+      let restaurantImage =
+        visit?.restaurantImage ??
+        visit?.logo_url ??
+        visit?.imagen_logo_url ??
+        null;
+      let bannerImage = visit?.bannerImage ?? visit?.imagen_banner_url ?? null;
+
+      if (restauranteId) {
+        const infoCacheKey = `restaurant_info_${restauranteId}`;
+        const branchesCacheKey = `restaurant_sucursales_${restauranteId}`;
+        let infoData = null;
+        let branchesData = null;
+
+        try {
+          const raw = await AsyncStorage.getItem(infoCacheKey);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            infoData = parsed?.data ?? parsed;
+          }
+        } catch (e) {
+          console.warn(
+            'enrichVisitWithBranchLogo restaurant info cache read error',
+            e,
+          );
+        }
+
+        try {
+          const raw = await AsyncStorage.getItem(branchesCacheKey);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            branchesData = parsed?.data ?? parsed;
+          }
+        } catch (e) {
+          console.warn(
+            'enrichVisitWithBranchLogo branches cache read error',
+            e,
+          );
+        }
+
+        if (!infoData) {
+          try {
+            const endpoint = `${API_URL}/api/restaurantes/${encodeURIComponent(
+              restauranteId,
+            )}`;
+            const headers = getAuthHeaders();
+            const res = await fetch(endpoint, {method: 'GET', headers});
+            if (res.ok) {
+              infoData = await res.json();
+              try {
+                await AsyncStorage.setItem(
+                  infoCacheKey,
+                  JSON.stringify({savedAt: Date.now(), data: infoData}),
+                );
+              } catch (e) {
+                console.warn(
+                  'enrichVisitWithBranchLogo restaurant info cache save error',
+                  e,
+                );
+              }
+            }
+          } catch (e) {
+            console.warn(
+              'enrichVisitWithBranchLogo restaurant info fetch error',
+              e,
+            );
+          }
+        }
+
+        if (!branchesData) {
+          try {
+            const endpoint = `${API_URL}/api/restaurantes/${encodeURIComponent(
+              restauranteId,
+            )}/sucursales`;
+            const headers = getAuthHeaders();
+            const res = await fetch(endpoint, {method: 'GET', headers});
+            if (res.ok) {
+              branchesData = await res.json();
+              try {
+                await AsyncStorage.setItem(
+                  branchesCacheKey,
+                  JSON.stringify({savedAt: Date.now(), data: branchesData}),
+                );
+              } catch (e) {
+                console.warn(
+                  'enrichVisitWithBranchLogo branches cache save error',
+                  e,
+                );
+              }
+            }
+          } catch (e) {
+            console.warn('enrichVisitWithBranchLogo branches fetch error', e);
+          }
+        }
+
+        if (infoData && typeof infoData === 'object') {
+          restaurantName =
+            cleanName(infoData?.nombre) ||
+            cleanName(infoData?.name) ||
+            restaurantName;
+        }
+
+        const sucursales = Array.isArray(branchesData?.sucursales)
+          ? branchesData.sucursales
+          : [];
+        const matched =
+          sucursales.find(s => String(s.id) === String(sucursalId)) ||
+          sucursales[0] ||
+          null;
+
+        if (matched) {
+          branchName = branchName || matched?.nombre || '';
+          restaurantImage = restaurantImage || matched?.imagen_logo_url || null;
+          bannerImage = bannerImage || matched?.imagen_banner_url || null;
+        }
+      }
+
       if (visit.restaurantImage)
         visit.restaurantImage = getCacheBustedUrl(visit.restaurantImage);
       if (visit.bannerImage)
         visit.bannerImage = getCacheBustedUrl(visit.bannerImage);
-      // don't call any external endpoints to try to find logos
-      return visit;
+
+      const finalRestaurantImage = restaurantImage
+        ? getCacheBustedUrl(String(restaurantImage))
+        : visit.restaurantImage || null;
+      const finalBannerImage = bannerImage
+        ? getCacheBustedUrl(String(bannerImage))
+        : visit.bannerImage || null;
+
+      return {
+        ...visit,
+        restaurante_id: visit?.restaurante_id ?? restauranteId ?? null,
+        restaurantId: visit?.restaurantId ?? restauranteId ?? null,
+        sucursal_id: visit?.sucursal_id ?? sucursalId ?? null,
+        branchId: visit?.branchId ?? sucursalId ?? null,
+        nombre_restaurante:
+          cleanName(restaurantName) ||
+          cleanName(visit?.nombre_restaurante) ||
+          cleanName(visit?.restaurantName) ||
+          '',
+        restaurantName:
+          cleanName(restaurantName) ||
+          cleanName(visit?.restaurantName) ||
+          cleanName(visit?.nombre_restaurante) ||
+          '',
+        nombre:
+          cleanName(restaurantName) ||
+          cleanName(visit?.nombre_restaurante) ||
+          cleanName(visit?.restaurantName) ||
+          '',
+        nombre_sucursal: branchName || visit?.nombre_sucursal || '',
+        branchName: branchName || visit?.branchName || '',
+        imagen_logo_url: finalRestaurantImage,
+        restaurantImage: finalRestaurantImage,
+        logo_url: finalRestaurantImage,
+        imagen_banner_url: finalBannerImage,
+        bannerImage: finalBannerImage,
+      };
     } catch (err) {
       console.warn('enrichVisitWithBranchLogo (noop) err', err);
       return visit;
@@ -905,6 +1113,12 @@ export default function ProfileScreen({navigation}) {
         data?.branchld ??
         data?.branchld ??
         null;
+      const restaurantId =
+        data?.restaurante_id ??
+        data?.restaurant_id ??
+        data?.restauranteId ??
+        data?.restaurantId ??
+        null;
       const notifId = data?.id ?? data?.notifId ?? payload?.id ?? null;
 
       if (notifId) {
@@ -920,8 +1134,22 @@ export default function ProfileScreen({navigation}) {
         const cached = await loadCachedVisits();
         const found = findVisitBySaleBranchLocal(cached, saleId, branchId);
         if (found) {
-          // ensure any existing images are cache-busted
-          const toNav = await enrichVisitWithBranchLogo(found);
+          const toNav = await enrichVisitWithBranchLogo(found, {
+            restaurantId,
+            branchId,
+            restaurantName:
+              data?.nombre_restaurante ??
+              data?.restaurantName ??
+              found?.nombre_restaurante ??
+              found?.restaurantName ??
+              '',
+            branchName:
+              data?.nombre_sucursal ??
+              data?.branchName ??
+              found?.nombre_sucursal ??
+              found?.branchName ??
+              '',
+          });
           setShowNotifications(false);
           navigation.navigate('Experiences', {
             screen: 'ExperiencesDetails',
@@ -978,19 +1206,31 @@ export default function ProfileScreen({navigation}) {
         branchId ||
         maybeAmount ||
         maybeBranchName ||
-        maybeRestaurantName
+        maybeRestaurantName ||
+        restaurantId
       ) {
         const candidate = {
           id: `${saleId ?? 'unknown'}_${branchId ?? 'unknown'}`,
           sale_id: saleId ?? null,
-          restaurante_id: data?.restaurante_id ?? data?.restaurante ?? null,
+          venta_id: saleId ?? null,
+          restaurante_id: restaurantId ?? null,
+          restaurant_id: restaurantId ?? null,
           sucursal_id: branchId ?? null,
-          restaurantName: maybeRestaurantName ?? maybeBranchName ?? null,
+          restaurantName: maybeRestaurantName ?? null,
+          nombre_restaurante: maybeRestaurantName ?? null,
           branchName: maybeBranchName ?? null,
+          nombre_sucursal: maybeBranchName ?? null,
           restaurantImage: maybeImage
             ? getCacheBustedUrl(String(maybeImage))
             : null,
+          imagen_logo_url: maybeImage
+            ? getCacheBustedUrl(String(maybeImage))
+            : null,
+          logo_url: maybeImage ? getCacheBustedUrl(String(maybeImage)) : null,
           bannerImage: maybeBanner
+            ? getCacheBustedUrl(String(maybeBanner))
+            : null,
+          imagen_banner_url: maybeBanner
             ? getCacheBustedUrl(String(maybeBanner))
             : null,
           fecha: isoDate,
@@ -1009,11 +1249,18 @@ export default function ProfileScreen({navigation}) {
           __raw_notification: data,
         };
 
-        // navigate directly to ExperiencesDetails passing the candidate
+        // Completar nombre/logo desde API de restaurantes/sucursales cuando haga falta
+        const candidateReady = await enrichVisitWithBranchLogo(candidate, {
+          restaurantId,
+          branchId,
+          restaurantName: maybeRestaurantName || '',
+          branchName: maybeBranchName || '',
+        });
+
         setShowNotifications(false);
         navigation.navigate('Experiences', {
           screen: 'ExperiencesDetails',
-          params: {visit: candidate},
+          params: {visit: candidateReady},
         });
         return;
       }
@@ -1067,6 +1314,7 @@ export default function ProfileScreen({navigation}) {
 
   const loadProfileFromApi = async () => {
     try {
+      await ensureToken();
       setProfileLoading(true);
       const email = await AsyncStorage.getItem('user_email');
       if (!email) {
@@ -1155,6 +1403,7 @@ export default function ProfileScreen({navigation}) {
 
   const uploadProfilePhoto = async asset => {
     try {
+      await ensureToken();
       setUploading(true);
       const uid = await AsyncStorage.getItem('user_usuario_app_id');
       if (!uid) {
@@ -1162,8 +1411,37 @@ export default function ProfileScreen({navigation}) {
         setUploading(false);
         return;
       }
+      //NO BORRAR JAMÁS
+      const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
-      const contentType = asset.type || 'image/jpeg';
+      const guessTypeFromName = (name = '') => {
+        const ext = name.split('.').pop()?.toLowerCase();
+        if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+        if (ext === 'png') return 'image/png';
+        if (ext === 'webp') return 'image/webp';
+        if (ext === 'heic' || ext === 'heif') return 'image/jpeg'; // we'll coerce
+        return null;
+      };
+
+      const normalizeContentType = asset => {
+        const raw = (asset?.type || '').toLowerCase();
+
+        // Fix common variants
+        if (raw === 'image/jpg') return 'image/jpeg';
+
+        // iOS HEIC/HEIF -> force jpeg for server compatibility
+        if (raw === 'image/heic' || raw === 'image/heif') return 'image/jpeg';
+
+        if (ALLOWED_TYPES.has(raw)) return raw;
+
+        const byName = guessTypeFromName(asset?.fileName);
+        if (byName) return byName;
+
+        // last resort
+        return 'image/jpeg';
+      };
+
+      const contentType = normalizeContentType(asset);
       const presignUrl = `${API_URL}/api/mobileapp/usuarios/${encodeURIComponent(
         uid,
       )}/foto/presign`;
@@ -1253,6 +1531,7 @@ export default function ProfileScreen({navigation}) {
 
   const removeProfilePhoto = async () => {
     try {
+      await ensureToken();
       setUploading(true);
 
       const uid = await AsyncStorage.getItem('user_usuario_app_id');
@@ -1397,8 +1676,8 @@ export default function ProfileScreen({navigation}) {
             email,
             avatarUrl: profileCached || null,
             savedAt: Date.now(),
-            email,
-            fullname: fullnameCached || '', // ADD
+            //  email,
+            //fullname: fullnameCached || '', // NO BORRAR JAMÁS TAMPOCO
           });
           if (!Array.isArray(arr)) arr = [];
           if (arr.length > 6) arr = arr.slice(0, 6);
@@ -1412,7 +1691,7 @@ export default function ProfileScreen({navigation}) {
           }
         }
       } catch (e) {
-        console.warn('Guardar recent account failed (pre-clean)', e);
+        console.warn('Guardar recent_account failed (pre-clean)', e);
       }
 
       const preserveKeys = new Set();
@@ -1463,6 +1742,7 @@ export default function ProfileScreen({navigation}) {
           'user_valid',
           'user_fullname',
           'user_profile_url',
+          'user_default_home',
         ]);
       } catch (e) {
         console.warn('Error removing persistent auth keys on logout', e);
@@ -1471,7 +1751,7 @@ export default function ProfileScreen({navigation}) {
       try {
         navigation.reset({
           index: 0,
-          routes: [{name: 'Login'}],
+          routes: [{name: 'Recent'}], //NO CAMBIAR JAMÁS (Login)
         });
       } catch (e) {
         console.warn(
@@ -1948,6 +2228,12 @@ export default function ProfileScreen({navigation}) {
             icon="refresh-circle-outline"
             label="Actualizar contraseña"
             onPress={() => navigation.navigate('ChangePassword')}
+            optionFont={optionFont}
+          />
+          <Option
+            icon="home-outline"
+            label="Seleccionar home"
+            onPress={() => navigation.navigate('SelectDefaultHome')}
             optionFont={optionFont}
           />
           <Option

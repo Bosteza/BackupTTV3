@@ -1,4 +1,4 @@
-//2 april
+//token
 import React, {useMemo, useState, useEffect} from 'react';
 import {
   SafeAreaView,
@@ -21,17 +21,18 @@ import LinearGradient from 'react-native-linear-gradient';
 import {useNavigation, useRoute} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const API_BASE_URL = 'https://api.tab-track.com';
-const API_AUTH_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
-const formatMoney = n =>
-  Number.isFinite(n)
-    ? n.toLocaleString('es-MX', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })
-    : '0.00';
+const formatMoney = n => {
+  const value = Number(n);
+  if (!Number.isFinite(value)) return '0.00';
+
+  const [integerPart, decimalPart] = value.toFixed(2).split('.');
+  const formattedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+  return `${formattedInteger}.${decimalPart}`;
+};
 
 const totalFontSizeFor = str => {
   const len = String(str).length;
@@ -155,6 +156,7 @@ export default function EqualSplit() {
   const moneda = route?.params?.moneda ?? 'MXN';
   const total_consumo_param =
     route?.params?.total ?? route?.params?.total_consumo ?? null;
+  const restaurantImage = route?.params?.restaurantImage ?? null;
 
   const ventaLookupId =
     saleId ?? route?.params?.ventaId ?? route?.params?.venta_id ?? null;
@@ -186,8 +188,8 @@ export default function EqualSplit() {
   const [modalConfirmLoading, setModalConfirmLoading] = useState(false);
 
   const [equalsSplitPaid, setEqualsSplitPaid] = useState(false);
-
   const [paidSplitCount, setPaidSplitCount] = useState(0);
+
   const [showPaidEditAlert, setShowPaidEditAlert] = useState(false);
 
   useEffect(() => {
@@ -197,10 +199,11 @@ export default function EqualSplit() {
       if (!idVenta) return null;
 
       const base = API_BASE_URL.replace(/\/$/, '');
+      await ensureToken();
       const headers = {
         Accept: 'application/json',
         'Content-Type': 'application/json',
-        ...(API_AUTH_TOKEN ? {Authorization: `Bearer ${API_AUTH_TOKEN}`} : {}),
+        ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
       };
 
       const url = `${base}/api/mesas/comensales/${encodeURIComponent(
@@ -264,6 +267,7 @@ export default function EqualSplit() {
         }
         setLoading(true);
         try {
+          await ensureToken();
           const url = `${API_BASE_URL.replace(
             /\/$/,
             '',
@@ -273,9 +277,7 @@ export default function EqualSplit() {
             headers: {
               Accept: 'application/json',
               'Content-Type': 'application/json',
-              ...(API_AUTH_TOKEN
-                ? {Authorization: `Bearer ${API_AUTH_TOKEN}`}
-                : {}),
+              ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
             },
           });
           if (!mounted) return;
@@ -333,14 +335,13 @@ export default function EqualSplit() {
           String(sucursalId),
         )}/ventas/${encodeURIComponent(String(ventaLookupId))}/splits`;
         try {
+          await ensureToken();
           const res = await fetch(url, {
             method: 'GET',
             headers: {
               Accept: 'application/json',
               'Content-Type': 'application/json',
-              ...(API_AUTH_TOKEN
-                ? {Authorization: `Bearer ${API_AUTH_TOKEN}`}
-                : {}),
+              ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
             },
           });
           if (!res || !res.ok) return;
@@ -477,6 +478,7 @@ export default function EqualSplit() {
     total_comensales: totalComensales,
     total_consumo: total_consumo_param ?? total,
     tipApplied: tipPercent > 0 ? {percent: tipPercent, tipAmount} : null,
+    restaurantImage,
   };
 
   const goToPropina = () => {
@@ -496,6 +498,7 @@ export default function EqualSplit() {
       perPersonTotalWithTip,
 
       tipApplied: payloadCommon.tipApplied,
+      restaurantImage,
     });
   };
 
@@ -574,13 +577,12 @@ export default function EqualSplit() {
             : null,
         numero_comensales: Number(numero),
       };
+      await ensureToken();
       const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(API_AUTH_TOKEN
-            ? {Authorization: `Bearer ${API_AUTH_TOKEN}`}
-            : {}),
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
         body: JSON.stringify(body),
       });
@@ -775,7 +777,11 @@ export default function EqualSplit() {
               />
               <View style={styles.logoWrap}>
                 <Image
-                  source={require('../../assets/images/restaurante.jpeg')}
+                  source={
+                    restaurantImage
+                      ? {uri: restaurantImage}
+                      : require('../../assets/images/restaurante.jpeg')
+                  }
                   style={styles.restaurantImage}
                 />
               </View>

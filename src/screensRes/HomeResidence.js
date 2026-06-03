@@ -19,6 +19,7 @@ import MiembrosResidence from './MiembrosResidence';
 import CuentaResidence from './CuentaResidence';
 import ConfirmacionConsumo from './ConfirmacionConsumo';
 import SecurityResidence from './SecurityResidence';
+import SelectDefaultHome from '../screens/SelectDefaultHome';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -69,6 +70,7 @@ function ProfileResidenceStack() {
       <Stack.Screen name="Terms" component={TermsAndConditions} />
       <Stack.Screen name="ChangePassword" component={ChangePassword} />
       <Stack.Screen name="SecurityResidence" component={SecurityResidence} />
+      <Stack.Screen name="SelectDefaultHome" component={SelectDefaultHome} />
     </Stack.Navigator>
   );
 }

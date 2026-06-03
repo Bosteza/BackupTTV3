@@ -1,4 +1,4 @@
-//Camera wrking???
+//token
 
 import React, {useEffect, useState, useRef, useCallback} from 'react';
 import {
@@ -28,7 +28,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useBottomTabBarHeight} from '@react-navigation/bottom-tabs';
 import LinearGradient from 'react-native-linear-gradient';
-
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 // 👇 native view we created in Xcode
 import IOSQRScannerMother from '../IOSQRScannerMother.native.js';
 
@@ -43,8 +43,6 @@ const camLog = (...a) => console.log('[QR][CAM]', ...a);
 const camWarn = (...a) => console.warn('[QR][CAM][WARN]', ...a);
 
 const API_BASE_FALLBACK = 'https://api.residence.tab-track.com';
-const API_TOKEN_FALLBACK =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const STORAGE_KEYS = {
   API_HOST: 'api_host',
@@ -124,12 +122,12 @@ const resolveApiHost = async raw => {
 };
 
 const buildHeaders = async () => {
+  await ensureToken();
   const headers = {
     Accept: 'application/json',
     'Content-Type': 'application/json',
   };
-  if (API_TOKEN_FALLBACK && String(API_TOKEN_FALLBACK).trim())
-    headers.Authorization = `Bearer ${API_TOKEN_FALLBACK}`;
+  if (TOKEN && String(TOKEN).trim()) headers.Authorization = `Bearer ${TOKEN}`;
   return headers;
 };
 
@@ -784,6 +782,8 @@ export default function QrResidence({navigation}) {
         return;
       }
 
+      await ensureToken();
+
       const now = new Date();
       const periodo = `${now.getFullYear()}${String(
         now.getMonth() + 1,
@@ -806,8 +806,8 @@ export default function QrResidence({navigation}) {
         Accept: 'application/json',
         'Content-Type': 'application/json',
       };
-      if (API_TOKEN_FALLBACK && String(API_TOKEN_FALLBACK).trim())
-        headers.Authorization = `Bearer ${API_TOKEN_FALLBACK}`;
+      if (TOKEN && String(TOKEN).trim())
+        headers.Authorization = `Bearer ${TOKEN}`;
 
       console.log('[dept-history] consultando URL:', url);
 
@@ -904,7 +904,7 @@ export default function QrResidence({navigation}) {
     fetchDepartmentHistory();
   }, [fetchDepartmentHistory]);
 
-  // Handler that receives the event from native view
+  // Handler that receives the event from native view (no borrar jamás)
   const handleNativeQRRead = event => {
     if (!scanningEnabled) return;
 

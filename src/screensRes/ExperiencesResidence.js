@@ -1,4 +1,4 @@
-/* Works 9 marz*/
+/* token*/
 import React, {useState, useRef, useEffect, useCallback} from 'react';
 import {
   View,
@@ -33,10 +33,9 @@ import {PDFDocument, StandardFonts, rgb} from 'pdf-lib';
 import RNFS from 'react-native-fs';
 import Share from 'react-native-share';
 import fontkit from '@pdf-lib/fontkit';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const API_BASE_FALLBACK = 'https://api.residence.tab-track.com';
-const API_TOKEN_FALLBACK =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const MONTH_NAMES = [
   'Enero',
@@ -149,13 +148,13 @@ export default function ExperiencesScreen() {
       )}`;
       const url = `${base}${path}`;
 
+      await ensureToken();
+
       const headers = {
         Accept: 'application/json',
         'Content-Type': 'application/json',
+        ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
       };
-      if (API_TOKEN_FALLBACK && String(API_TOKEN_FALLBACK).trim())
-        headers.Authorization = `Bearer ${API_TOKEN_FALLBACK}`;
-
       // fetch
       const res = await fetch(url, {method: 'GET', headers});
       let json = null;
@@ -350,13 +349,13 @@ export default function ExperiencesScreen() {
           periodo,
         )}&detalle=true&tz_offset_minutes=${encodeURIComponent(String(-360))}`;
         const url = `${base}${path}`;
+        await ensureToken();
+
         const headers = {
           Accept: 'application/json',
           'Content-Type': 'application/json',
+          ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         };
-        if (API_TOKEN_FALLBACK && String(API_TOKEN_FALLBACK).trim())
-          headers.Authorization = `Bearer ${API_TOKEN_FALLBACK}`;
-
         const res = await fetch(url, {method: 'GET', headers});
         let json = null;
         try {
@@ -541,10 +540,9 @@ export default function ExperiencesScreen() {
     fetchYearHistory();
   }, [fetchYearHistory]);
 
-  // --- NEW: procesar params de ruta entrantes (si la app navegó aquí con notificación) ---
   useEffect(() => {
     if (route?.params) {
-      const incoming = route.params.notification ?? route.params; // aceptamos {notification:{...}} o directamente params
+      const incoming = route.params.notification ?? route.params;
       if (
         incoming &&
         (incoming.sale_id || incoming.transactionId || incoming.periodo)
@@ -726,7 +724,7 @@ export default function ExperiencesScreen() {
     });
   };
 
-  //NEWWWWWWWWWWW
+  //NEWWWWWWWWWWW no borrar jamás
   const FONT_FILE = 'Montserrat-Regular.ttf';
 
   const normalizePdfText = value => {

@@ -1,4 +1,4 @@
-//Sirve 9 marz changes not implemented due to design
+//tokn
 import React, {useMemo, useState, useEffect, useRef} from 'react';
 import {
   View,
@@ -20,6 +20,7 @@ import {useNavigation} from '@react-navigation/native';
 import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const FILTER_OPTIONS = [
   'Todos los avisos',
@@ -30,8 +31,6 @@ const FILTER_OPTIONS = [
 ];
 
 const API_URL = 'https://api.residence.tab-track.com';
-const TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 export default function FeedResicende() {
   const navigation = useNavigation();
@@ -93,6 +92,7 @@ export default function FeedResicende() {
     return null;
   };
 
+  //NO BORRAR JAMÁS----------------------
   const formatDateShortWithTime = dateRaw => {
     // If the API did not send a date, return an empty string
     if (!dateRaw) return '';
@@ -209,7 +209,7 @@ export default function FeedResicende() {
   const parseHorarioRange = horario => {
     if (!horario || typeof horario !== 'string') return null;
     const parts = horario
-      .split(/\s*(?:-|–|—|a|to)\s*/i)
+      .split(/\s*(?:-|–|—|\bto\b|\ba\b)\s*/i)
       .map(p => p.trim())
       .filter(Boolean);
     if (parts.length < 2) return null;
@@ -234,7 +234,7 @@ export default function FeedResicende() {
 
   const formatHorarioDisplay = horario => {
     if (!horario || typeof horario !== 'string') return null;
-    return horario.replace(/\s*(?:-|–|—|a|to)\s*/gi, ' - ');
+    return horario.replace(/\s*(?:-|–|—|\bto\b|\ba\b)\s*/gi, ' - ');
   };
 
   useEffect(() => {
@@ -263,6 +263,7 @@ export default function FeedResicende() {
           }
           return;
         }
+        await ensureToken();
 
         const base = API_URL.replace(/\/$/, '');
         let edificioId = null;

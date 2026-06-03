@@ -1,4 +1,4 @@
-//Post fixes 9 m
+//TOKEN
 import React, {useEffect, useState, useRef, useCallback} from 'react';
 import {
   View,
@@ -23,6 +23,7 @@ import {request, PERMISSIONS, RESULTS} from 'react-native-permissions';
 import {useFocusEffect, useIsFocused} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 // 👇 this is the native view we’ll create in Xcode
 import IOSQRScannerMother from '../IOSQRScannerMother.native.js';
@@ -32,8 +33,6 @@ const camLog = (...a) => console.log('[QR][CAM]', ...a);
 const camWarn = (...a) => console.warn('[QR][CAM][WARN]', ...a);
 
 const API_BASE_FALLBACK = 'https://api.tab-track.com';
-const API_TOKEN_FALLBACK =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc3NTUxMjcwNSwianRpIjoiNzA1NjU2YjgtZGFiZS00M2NlLTk2MjUtZmE5ODdmY2FiY2ZiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjMiLCJuYmYiOjE3NzU1MTI3MDUsImV4cCI6MTc3ODEwNDcwNSwicm9sIjoiRWRpdG9yIn0.03LJs1TRZzehSXSh5Cdez2e5NFSrANijsS4H6gUjm78';
 
 const STORAGE_KEYS = {
   API_HOST: 'api_host',
@@ -111,7 +110,8 @@ const resolveApiHost = async raw => {
 };
 
 const buildHeaders = async () => {
-  let token = API_TOKEN_FALLBACK;
+  await ensureToken();
+  let token = TOKEN;
   try {
     const storedToken = await AsyncStorage.getItem(STORAGE_KEYS.API_TOKEN);
     if (storedToken) token = storedToken;
@@ -439,6 +439,54 @@ export default function QRScreen({navigation}) {
 
   const startManualScan = () => reactivateScanner(true);
   const toggleFlash = () => setFlashEnabled(p => !p);
+  const onSuccess = async e => {
+    if (!allowScan && !allowScanForStatus) return;
+
+    setAllowScan(false);
+    setAllowScanForStatus(false);
+    setScannerActive(false);
+
+    const raw = e?.data ?? '';
+    const token = extractTokenFromRaw(raw);
+
+    if (!token) {
+      setStatusResult({
+        ok: false,
+        message: 'No se encontró un token válido en el QR.',
+      });
+      setStatusLoading(false);
+      setStatusModalVisible(true);
+
+      setTimeout(() => reactivateScanner(true), 900);
+      return;
+    }
+
+    if (allowScanForStatus) {
+      if (statusTimeoutRef.current) {
+        clearTimeout(statusTimeoutRef.current);
+        statusTimeoutRef.current = null;
+      }
+      handleStatusFetchForToken(raw, token);
+      return;
+    }
+
+    navigation.navigate('Escanear', {token});
+  };
+  // Handler que recibe el evento desde el componente nativo
+  const handleNativeQRRead = event => {
+    const scanningEnabled = allowScan || allowScanForStatus;
+    if (!scanningEnabled) return;
+
+    if (isHandlingScanRef.current) return;
+    isHandlingScanRef.current = true;
+
+    const data = event?.nativeEvent?.data ?? '';
+    Promise.resolve(onSuccess({data}))
+      .catch(err => console.warn('Error in onSuccess', err))
+      .finally(() => {
+        isHandlingScanRef.current = false;
+      });
+  };
 
   const showStatusModal = (resultObj, token = null, loading = false) => {
     if (statusTimeoutRef.current) {
@@ -509,6 +557,7 @@ export default function QRScreen({navigation}) {
     );
 
     try {
+      await ensureToken();
       const host = await resolveApiHost(raw);
       if (!host) {
         setStatusLoading(false);
@@ -581,54 +630,7 @@ export default function QRScreen({navigation}) {
       );
     }
   };
-  const onSuccess = async e => {
-    if (!allowScan && !allowScanForStatus) return;
 
-    setAllowScan(false);
-    setAllowScanForStatus(false);
-    setScannerActive(false);
-
-    const raw = e?.data ?? '';
-    const token = extractTokenFromRaw(raw);
-
-    if (!token) {
-      setStatusResult({
-        ok: false,
-        message: 'No se encontró un token válido en el QR.',
-      });
-      setStatusLoading(false);
-      setStatusModalVisible(true);
-
-      setTimeout(() => reactivateScanner(true), 900);
-      return;
-    }
-
-    if (allowScanForStatus) {
-      if (statusTimeoutRef.current) {
-        clearTimeout(statusTimeoutRef.current);
-        statusTimeoutRef.current = null;
-      }
-      handleStatusFetchForToken(raw, token);
-      return;
-    }
-
-    navigation.navigate('Escanear', {token});
-  };
-  // Handler que recibe el evento desde el componente nativo
-  const handleNativeQRRead = event => {
-    const scanningEnabled = allowScan || allowScanForStatus;
-    if (!scanningEnabled) return;
-
-    if (isHandlingScanRef.current) return;
-    isHandlingScanRef.current = true;
-
-    const data = event?.nativeEvent?.data ?? '';
-    Promise.resolve(onSuccess({data}))
-      .catch(err => console.warn('Error in onSuccess', err))
-      .finally(() => {
-        isHandlingScanRef.current = false;
-      });
-  };
   if (!hasPermission) {
     return (
       <View style={[styles.loading, {backgroundColor: '#000'}]}>
