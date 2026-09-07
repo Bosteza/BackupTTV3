@@ -1,4 +1,3 @@
-//token
 import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   ScrollView,
@@ -1743,6 +1742,7 @@ export default function ProfileScreen({navigation}) {
           'user_fullname',
           'user_profile_url',
           'user_default_home',
+          'user_environment',
         ]);
       } catch (e) {
         console.warn('Error removing persistent auth keys on logout', e);
@@ -2200,12 +2200,12 @@ export default function ProfileScreen({navigation}) {
             onPress={() => navigation.navigate('InfoPersonal')}
             optionFont={optionFont}
           />
-          {/*  <Option
+          <Option
             icon="card-outline"
             label="Métodos de Pago"
             onPress={() => navigation.navigate('Payments')}
             optionFont={optionFont}
-          /> */}
+          />
           <Option
             icon="document-text-outline"
             label="Facturación"

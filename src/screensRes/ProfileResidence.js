@@ -221,6 +221,7 @@ export default function ProfileResidence({navigation}) {
       } catch (e) {}
       return null;
     })();
+
     const baseText =
       notif.text ||
       raw.text ||
@@ -413,12 +414,13 @@ export default function ProfileResidence({navigation}) {
 
         const total =
           Number(
-            (detail && (detail.total_consumo ?? detail.total)) ||
-              c.total ||
-              c.total_consumo ||
+            (detail &&
+              (detail.total_pagar ?? detail.total_consumo ?? detail.total)) ??
+              c.total_pagar ??
+              c.total ??
+              c.total_consumo ??
               0,
           ) || 0;
-
         const dateSource =
           fechaC ||
           fechaA ||
@@ -434,6 +436,7 @@ export default function ProfileResidence({navigation}) {
             return String(dateSource);
           }
         })();
+
         const periodo = (() => {
           try {
             const d = new Date(normalizedDate);
@@ -445,6 +448,7 @@ export default function ProfileResidence({navigation}) {
           } catch (e) {}
           return null;
         })();
+
         const notif = normalizeNotification({
           id: c.sale_id
             ? `sale_${c.sale_id}_${normalizedDate}`
@@ -469,11 +473,12 @@ export default function ProfileResidence({navigation}) {
             rawConsumption: c,
             detail,
             items,
-
             approved_by_nombre: approvedByName,
             approved_by_email: approvedByEmail,
             department_id: deptId,
-            total_consumo: total,
+            total_consumo: c.total_consumo,
+            total_pagar: total,
+            monto_propina: c.monto_propina,
             fecha_apertura: fechaA,
             fecha_cierre: fechaC,
             sale_id: c.sale_id ?? null,

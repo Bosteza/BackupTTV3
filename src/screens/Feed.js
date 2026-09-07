@@ -1,4 +1,4 @@
-//Token
+//Pendiente revisar MODAL B
 import React, {useState, useEffect, useRef} from 'react';
 import {
   View,
@@ -37,9 +37,42 @@ const API_URL_2 = 'https://api.tab-track.com/api/encuestas';
 const SURVEY_ID = '8916180a-95fd-46af-bde4-60635cc7e1ab';
 const FAVORITES_OBJS_KEY = 'favorites_objs';
 const GLOBAL_FAVORITES_OBJS_KEY = 'favorites_objs';
+const USER_ENVIRONMENT_KEY = 'user_environment';
 
 const STAR_COLOR = '#ffbf00';
 const BLUE = '#0046ff';
+
+// NUEVO: valores por defecto de los filtros de precio. Representan el
+// estado "sin filtro" (todo el rango posible), para que al entrar a la
+// pantalla se muestren todos los restaurantes sin que el filtro de precio
+// excluya nada.
+const DEFAULT_MIN_PRICE = 0;
+const DEFAULT_MAX_PRICE = 2000;
+// NUEVO: radio de búsqueda por defecto en 0 (filtro inactivo). Solo tiene
+// efecto una vez que la ubicación está activada (useLocation === true).
+const DEFAULT_SEARCH_RADIUS_KM = 0;
+
+const normalizeEnvironment = value => {
+  if (value === null || value === undefined) return '';
+  return String(value).trim().toLowerCase();
+};
+
+// NUEVO: determina si un restaurante viene marcado como activo en el
+// listado de la API (campo 'activo'). Si el restaurante trae
+// explícitamente activo === false (o "false" como string), se descarta
+// junto con todas sus sucursales. Si el campo no viene en la respuesta,
+// se asume activo para no ocultar restaurantes por falta de dato.
+const isRestaurantActive = rest => {
+  if (!rest) return false;
+  const raw =
+    rest.activo ?? rest.active ?? rest?.raw?.activo ?? rest?.raw?.active;
+  if (raw === undefined || raw === null) return true;
+  if (typeof raw === 'boolean') return raw;
+  const s = String(raw).trim().toLowerCase();
+  if (s === 'false' || s === '0' || s === 'no') return false;
+  if (s === 'true' || s === '1' || s === 'si' || s === 'sí') return true;
+  return true;
+};
 
 const getAuthHeaders = (extra = {}) => {
   const base = {
@@ -146,6 +179,54 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 }
 
 /* ------------------ fetchSurveyAvgForSucursal (sin tocar, devuelve 0.0 si no hay datos) ------------------ */
+/* ------------------ NUEVO: utilidades de red robustas ------------------ */
+
+// Ejecuta 'asyncFn' sobre 'items' con un límite de tareas concurrentes,
+// en vez de disparar todas las peticiones al mismo tiempo (esto evita
+// saturar el servidor local y que algunas peticiones fallen "al azar").
+async function mapWithConcurrencyLimit(items, limit, asyncFn) {
+  const results = new Array(items.length);
+  let index = 0;
+
+  async function worker() {
+    while (index < items.length) {
+      const current = index;
+      index += 1;
+      try {
+        results[current] = await asyncFn(items[current], current);
+      } catch (e) {
+        console.warn('mapWithConcurrencyLimit - tarea falló', e);
+        results[current] = undefined;
+      }
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  const workers = Array.from({length: workerCount}, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
+// fetch con un reintento simple para peticiones que fallan por red/timeout
+// intermitente (común al pegarle muy seguido a un servidor local).
+async function fetchWithRetry(url, options = {}, retries = 1) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+/* ------------------ fetchSurveyAvgForSucursal ------------------ */
+
 const fetchSurveyAvgForSucursal = async sucursalId => {
   if (!sucursalId) return 0.0;
   try {
@@ -153,10 +234,14 @@ const fetchSurveyAvgForSucursal = async sucursalId => {
     const url = `${API_URL_2.replace(/\/$/, '')}/${encodeURIComponent(
       SURVEY_ID,
     )}/reportes?sucursal_id=${encodeURIComponent(sucursalId)}`;
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: getAuthHeaders(),
-    });
+    const res = await fetchWithRetry(
+      url,
+      {
+        method: 'GET',
+        headers: getAuthHeaders(),
+      },
+      1,
+    );
     if (!res.ok) {
       console.warn('fetchSurveyAvgForSucursal - http status', res.status, url);
       return 0.0;
@@ -202,17 +287,25 @@ const fetchAllRestaurants = async () => {
       const sep = API_URL.includes('?') ? '&' : '?';
       const url = `${API_URL}${sep}page=${page}&per_page=${perPage}`;
 
-      const res = await fetch(url, {
-        method: 'GET',
-        headers: getAuthHeaders(),
-      });
+      const res = await fetchWithRetry(
+        url,
+        {
+          method: 'GET',
+          headers: getAuthHeaders(),
+        },
+        1,
+      );
 
       if (!res.ok) {
         if (page === 1) {
-          const res2 = await fetch(API_URL, {
-            method: 'GET',
-            headers: getAuthHeaders(),
-          });
+          const res2 = await fetchWithRetry(
+            API_URL,
+            {
+              method: 'GET',
+              headers: getAuthHeaders(),
+            },
+            1,
+          );
           if (!res2.ok) throw new Error(`HTTP ${res2.status}`);
           const json2 = await res2.json().catch(() => null);
           let itemsFallback = [];
@@ -252,9 +345,17 @@ const fetchAllRestaurants = async () => {
         json.total_pages || (json.meta && json.meta.total_pages) || null;
       const nextPageUrl = json.next_page_url || json.next || null;
 
-      if (nextPageUrl) break;
-      if (totalPages && page >= Number(totalPages)) break;
-      if (items.length < perPage) break;
+      // CORREGIDO: antes se hacía `if (nextPageUrl) break;`, lo cual detenía
+      // la paginación justo cuando la API indicaba que SÍ había más páginas
+      // (truncando el listado a la primera página, ej. 100 restaurantes).
+      // La lógica correcta es: seguir pidiendo páginas mientras haya
+      // 'total_pages' pendientes o un 'next_page_url', y parar solo cuando
+      // ya no queden más páginas o la página vino incompleta.
+      if (totalPages) {
+        if (page >= Number(totalPages)) break;
+      } else if (!nextPageUrl) {
+        if (items.length < perPage) break;
+      }
 
       page += 1;
     }
@@ -278,14 +379,15 @@ export default function RestaurantsScreen() {
   const {width, wp, hp, rf, clamp} = useResponsive();
   const insets = useSafeAreaInsets();
 
-  const [restaurants, setRestaurants] = useState([]); // contendrá únicamente sucursales
+  const [restaurants, setRestaurants] = useState([]);
   const [filteredData, setFilteredData] = useState([]);
   const [cities, setCities] = useState(['Todos']);
   const [favorites, setFavorites] = useState([]);
+  const [environment, setEnvironment] = useState('');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [minRating, setMinRating] = useState(0);
-  const [city, setCity] = useState('Todos'); // kept for compatibility but not shown in UI now
+  const [city, setCity] = useState('Todos');
   const [showFilterModal, setShowFilterModal] = useState(false);
 
   const sampleTypes = [
@@ -311,8 +413,11 @@ export default function RestaurantsScreen() {
   ];
   const [cuisine, setCuisine] = useState('todos');
 
-  const [minPrice, setMinPrice] = useState(0);
-  const [maxPrice, setMaxPrice] = useState(500);
+  // CAMBIADO: rango de precios por defecto ahora cubre todo el rango
+  // posible (0 - 2000) para que, sin tocar el filtro, no se excluya a
+  // ningún restaurante.
+  const [minPrice, setMinPrice] = useState(DEFAULT_MIN_PRICE);
+  const [maxPrice, setMaxPrice] = useState(DEFAULT_MAX_PRICE);
 
   const [loading, setLoading] = useState(true);
 
@@ -322,8 +427,16 @@ export default function RestaurantsScreen() {
   const toastTimerRef = useRef(null);
 
   const [useLocation, setUseLocation] = useState(false);
-  const [userLocation, setUserLocation] = useState(null); // { latitude, longitude }
-  const [searchRadiusKm, setSearchRadiusKm] = useState(5); // default 5km
+  const [userLocation, setUserLocation] = useState(null);
+  // CAMBIADO: radio de búsqueda inicia en 0 (filtro inactivo por defecto).
+  const [searchRadiusKm, setSearchRadiusKm] = useState(
+    DEFAULT_SEARCH_RADIUS_KM,
+  );
+
+  // NUEVO: estado para el aviso de confirmación al mover el radio de
+  // búsqueda sin tener la ubicación activada todavía.
+  const [showRadiusConfirm, setShowRadiusConfirm] = useState(false);
+  const [pendingRadius, setPendingRadius] = useState(null);
 
   const runShowToast = message => {
     setToastMessage(message);
@@ -354,284 +467,583 @@ export default function RestaurantsScreen() {
     }
   };
 
-  // Obtener ubicación del usuario y activar useLocation sólo si tuvo éxito
+  // CAMBIADO: ahora devuelve un booleano (true = ubicación obtenida con
+  // éxito, false = no se pudo activar), para poder encadenar acciones
+  // (como aplicar el radio de búsqueda pendiente) solo si tuvo éxito.
+  // También se quitó el toast de "Ubicación obtenida" que ya no se
+  // necesita mostrar.
   const requestLocationAndActivate = async () => {
     try {
       const ok = await hasLocationPermission();
       if (!ok) {
         runShowToast('Permiso de ubicación denegado');
         setUseLocation(false);
-        return;
+        return false;
       }
 
-      Geolocation.getCurrentPosition(
-        position => {
-          const {latitude, longitude} = position.coords || {};
-          if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-            setUserLocation({latitude, longitude});
-            setUseLocation(true);
-            runShowToast('Ubicación obtenida');
-          } else {
+      return await new Promise(resolve => {
+        Geolocation.getCurrentPosition(
+          position => {
+            const {latitude, longitude} = position.coords || {};
+            if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+              setUserLocation({latitude, longitude});
+              setUseLocation(true);
+              resolve(true);
+            } else {
+              setUserLocation(null);
+              setUseLocation(false);
+              runShowToast('No se pudo obtener ubicación válida');
+              resolve(false);
+            }
+          },
+          error => {
+            console.warn(
+              'requestLocationAndActivate - geolocation error',
+              error,
+            );
             setUserLocation(null);
             setUseLocation(false);
-            runShowToast('No se pudo obtener ubicación válida');
-          }
-        },
-        error => {
-          console.warn('requestLocationAndActivate - geolocation error', error);
-          setUserLocation(null);
-          setUseLocation(false);
-          // Mensaje amigable
-          if (error && error.code === 1) {
-            runShowToast('Permiso de ubicación denegado');
-          } else if (error && error.code === 2) {
-            runShowToast('No se encontró la ubicación del dispositivo');
-          } else {
-            runShowToast(
-              error?.message
-                ? String(error.message)
-                : 'Error obteniendo ubicación',
-            );
-          }
-        },
-        {enableHighAccuracy: true, timeout: 15000, maximumAge: 10000},
-      );
+            if (error && error.code === 1) {
+              runShowToast('Permiso de ubicación denegado');
+            } else if (error && error.code === 2) {
+              runShowToast('No se encontró la ubicación del dispositivo');
+            } else {
+              runShowToast(
+                error?.message
+                  ? String(error.message)
+                  : 'Error obteniendo ubicación',
+              );
+            }
+            resolve(false);
+          },
+          {enableHighAccuracy: true, timeout: 15000, maximumAge: 10000},
+        );
+      });
     } catch (e) {
       console.warn('requestLocationAndActivate exception', e);
       setUserLocation(null);
       setUseLocation(false);
       runShowToast('Error solicitando permiso de ubicación');
+      return false;
     }
   };
 
-  // FETCH restaurantes + sucursales (reutilizo tu lógica y agrego la consulta de survey si corresponde)
+  // NUEVO: se dispara cuando el usuario suelta el slider de radio de
+  // búsqueda sin tener la ubicación activada. Guarda el valor que quería
+  // poner y muestra el aviso de confirmación.
+  const handleRadiusSlidingComplete = value => {
+    if (useLocation) {
+      setSearchRadiusKm(value);
+      return;
+    }
+
+    // Guardamos el valor que el usuario quería
+    setPendingRadius(value);
+
+    // Primero cerramos MODAL B
+    setShowFilterModal(false);
+
+    // Después mostramos MODAL A
+    setTimeout(() => {
+      setShowRadiusConfirm(true);
+    }, 300);
+  };
+
+  // NUEVO: el usuario aceptó activar la ubicación desde el aviso del radio
+  // de búsqueda. Si se obtiene la ubicación con éxito, se aplica el radio
+  // que había intentado poner.
+  const handleAcceptRadiusConfirm = async () => {
+    setShowRadiusConfirm(false);
+    const ok = await requestLocationAndActivate();
+    if (ok && pendingRadius != null) {
+      setSearchRadiusKm(pendingRadius);
+    }
+    setPendingRadius(null);
+  };
+
+  // NUEVO: el usuario canceló el aviso; el radio de búsqueda se mantiene
+  // desactivado (vuelve a su valor anterior porque nunca se actualizó el
+  // estado real del filtro).
+  const handleCancelRadiusConfirm = () => {
+    setShowRadiusConfirm(false);
+    setPendingRadius(null);
+  };
+
   useEffect(() => {
     let mounted = true;
+
     (async () => {
       try {
         setLoading(true);
         await ensureToken();
 
+        const rawEnvironment = await AsyncStorage.getItem(USER_ENVIRONMENT_KEY);
+        const normalizedEnvironment = normalizeEnvironment(rawEnvironment);
+        setEnvironment(normalizedEnvironment);
+
+        console.warn(
+          '[RestaurantsScreen] user_environment desde AsyncStorage:',
+          {
+            rawEnvironment,
+            normalizedEnvironment,
+          },
+        );
+
         const list = await fetchAllRestaurants();
+        console.warn(
+          '[RestaurantsScreen] restaurantes recibidos desde API:',
+          Array.isArray(list) ? list.length : list,
+        );
+
         if (!Array.isArray(list)) {
-          console.warn('fetchAllRestaurants returned non-array', list);
+          console.warn(
+            '[RestaurantsScreen] fetchAllRestaurants no devolvió un array:',
+            list,
+          );
         }
         if (!mounted) return;
 
+        const allRestaurantsRaw = Array.isArray(list) ? list : [];
+
+        // NUEVO: solo se procesan (y por lo tanto solo se listan sus
+        // sucursales) los restaurantes que vienen marcados como activos.
+        // Los que traen activo === false quedan fuera desde aquí, así no
+        // se gastan peticiones de detalle/sucursales en restaurantes que
+        // no deben mostrarse.
+        const allRestaurants = allRestaurantsRaw.filter(isRestaurantActive);
+
+        console.warn(
+          '[RestaurantsScreen] restaurantes activos vs total recibido:',
+          {
+            activos: allRestaurants.length,
+            total: allRestaurantsRaw.length,
+          },
+        );
+
         const restNameMap = {};
-        const restDetailPromises = list.map(async rest => {
+        const restEnvironmentMap = {};
+
+        // NUEVO: concurrencia limitada (antes se disparaban TODAS las
+        // peticiones de detalle al mismo tiempo, lo que podía saturar el
+        // servidor local y hacer fallar peticiones al azar).
+        await mapWithConcurrencyLimit(allRestaurants, 6, async rest => {
           try {
             if (!rest || rest.id === undefined || rest.id === null) return;
+
             await ensureToken();
             const restUrl = `${API_URL.replace(/\/$/, '')}/${encodeURIComponent(
               rest.id,
             )}`;
-            const rr = await fetch(restUrl, {
-              headers: getAuthHeaders(),
-            });
-            if (!rr.ok) return;
-            const rjson = await rr.json();
-            const nombre = rjson?.nombre ?? rjson?.name ?? null;
+            const rr = await fetchWithRetry(
+              restUrl,
+              {
+                headers: getAuthHeaders(),
+              },
+              1,
+            );
+            if (!rr.ok) {
+              console.warn(
+                '[RestaurantsScreen] detalle de restaurante falló:',
+                {
+                  id: rest.id,
+                  status: rr.status,
+                },
+              );
+              return;
+            }
+
+            const rjson = await rr.json().catch(() => null);
+
+            const nombre =
+              rjson?.nombre ??
+              rjson?.name ??
+              rest?.nombre ??
+              rest?.name ??
+              null;
             if (nombre) restNameMap[String(rest.id)] = String(nombre);
+            const restEnv = normalizeEnvironment(
+              rjson?.environment ??
+                rest?.environment ??
+                rest?.raw?.environment ??
+                rest?.environment_type ??
+                '',
+            );
+
+            if (restEnv) {
+              restEnvironmentMap[String(rest.id)] = restEnv;
+            } else {
+              console.warn(
+                '[RestaurantsScreen] restaurante sin environment detectable:',
+                {
+                  id: rest?.id,
+                  nombre: nombre || rest?.nombre || rest?.name,
+                  apiListEnvironment: rest?.environment,
+                  detailEnvironment: rjson?.environment,
+                },
+              );
+            }
           } catch (e) {
             console.warn(
-              'Error fetching restaurant detail for id',
+              '[RestaurantsScreen] Error fetching restaurant detail for id:',
               rest?.id,
               e,
             );
           }
         });
-        await Promise.allSettled(restDetailPromises);
+        const branchesArraysRaw = await mapWithConcurrencyLimit(
+          allRestaurants,
+          6,
+          async rest => {
+            try {
+              if (!rest || rest.id === undefined || rest.id === null) return [];
 
-        const branchPromises = list.map(async rest => {
-          try {
-            if (!rest || rest.id === undefined || rest.id === null) return [];
-            await ensureToken();
-            const url = `${API_URL.replace(/\/$/, '')}/${encodeURIComponent(
-              rest.id,
-            )}/sucursales`;
-            const r = await fetch(url, {
-              headers: getAuthHeaders(),
-            });
+              await ensureToken();
+              const url = `${API_URL.replace(/\/$/, '')}/${encodeURIComponent(
+                rest.id,
+              )}/sucursales`;
+              const r = await fetchWithRetry(
+                url,
+                {
+                  headers: getAuthHeaders(),
+                },
+                1,
+              );
 
-            if (!r.ok) {
+              if (!r.ok) {
+                console.warn(
+                  `[RestaurantsScreen] sucursales request failed para rest ${rest.id}`,
+                  {
+                    status: r.status,
+                    url,
+                  },
+                );
+                return [];
+              }
+
+              const j = await r.json().catch(() => null);
+              if (!j) {
+                console.warn(
+                  '[RestaurantsScreen] respuesta vacía en sucursales para rest:',
+                  rest.id,
+                );
+                return [];
+              }
+
+              // Un objeto "parece una sucursal" si trae al menos un identificador
+              // o nombre/dirección reconocible (heurística para el caso de que
+              // el backend devuelva un objeto suelto en vez de un arreglo).
+              const looksLikeSucursal = obj =>
+                obj &&
+                typeof obj === 'object' &&
+                !Array.isArray(obj) &&
+                (obj.id !== undefined ||
+                  obj.nombre !== undefined ||
+                  obj.name !== undefined ||
+                  obj.direccion !== undefined ||
+                  obj.address !== undefined);
+
+              let branches = [];
+              if (Array.isArray(j.sucursales)) branches = j.sucursales;
+              else if (
+                Array.isArray(j.data) &&
+                Array.isArray(j.data.sucursales)
+              )
+                branches = j.data.sucursales;
+              else if (Array.isArray(j.data)) branches = j.data;
+              else if (Array.isArray(j.results)) branches = j.results;
+              else if (Array.isArray(j.items)) branches = j.items;
+              else if (Array.isArray(j)) branches = j;
+              // NUEVO: casos donde el backend devuelve UNA sola sucursal sin
+              // envolverla en arreglo (frecuente cuando el restaurante solo
+              // tiene una sucursal). Antes esto se interpretaba como "0
+              // sucursales" y la sucursal desaparecía del listado.
+              else if (looksLikeSucursal(j.sucursal)) branches = [j.sucursal];
+              else if (looksLikeSucursal(j.data)) branches = [j.data];
+              else if (looksLikeSucursal(j)) branches = [j];
+              else branches = [];
+
+              if (!branches || branches.length === 0) {
+                // Log detallado: si esto se repite para el mismo restaurante,
+                // copia esta salida para ver la forma exacta que regresa la API
+                // y así ajustar el parseo si sigue sin coincidir con nada.
+                let rawPreview = '';
+                try {
+                  rawPreview = JSON.stringify(j).slice(0, 500);
+                } catch (e) {
+                  rawPreview = '(no se pudo serializar)';
+                }
+                console.warn(
+                  '[RestaurantsScreen] sin sucursales para restaurant (revisa la forma de la respuesta):',
+                  {
+                    restaurantId: rest.id,
+                    url,
+                    rawPreview,
+                  },
+                );
+                return [];
+              }
+
+              const parentEnv = normalizeEnvironment(
+                restEnvironmentMap[String(rest.id)] ??
+                  rest?.environment ??
+                  rest?.raw?.environment ??
+                  '',
+              );
+
+              const mappedPromises = branches.map(async b => {
+                const rangoRaw =
+                  b.rango_precios ?? b.price_range ?? b.price_range_raw ?? null;
+                const parsedRange = parsePriceRange(rangoRaw);
+
+                let priceMin = null;
+                let priceMax = null;
+                const avgPrice =
+                  Number(b.avg_price ?? b.price ?? b.average_price ?? 0) || 0;
+                if (Number.isFinite(avgPrice) && avgPrice > 0) {
+                  priceMin = avgPrice;
+                  priceMax = avgPrice;
+                } else if (parsedRange) {
+                  priceMin = parsedRange.min;
+                  priceMax = parsedRange.max;
+                }
+
+                const tipo_comida_raw =
+                  b.tipo_comida ?? b.tipo ?? b.category ?? b.cuisine ?? '';
+                const imagen_banner_url =
+                  b.imagen_banner_url ??
+                  b.imagen_banner ??
+                  b.banner_url ??
+                  b.banner ??
+                  null;
+                const imagen_logo_url =
+                  b.imagen_logo_url ?? b.imagen_logo ?? b.logo ?? null;
+                const imagenes_array = Array.isArray(b.imagenes)
+                  ? b.imagenes
+                  : Array.isArray(b.images)
+                  ? b.images
+                  : null;
+                const cardImage =
+                  imagen_banner_url ??
+                  imagen_logo_url ??
+                  b.imagen ??
+                  b.image ??
+                  null;
+                const url_opentable =
+                  b.url_opentable ??
+                  b.opentable_url ??
+                  b.url_reservation ??
+                  b.booking_url ??
+                  null;
+                const restName =
+                  restNameMap[String(rest.id)] ??
+                  rest.nombre ??
+                  rest.name ??
+                  '';
+                const branchNamePart = (b.nombre ?? b.name ?? '')
+                  .toString()
+                  .trim();
+                const combinedName = restName
+                  ? branchNamePart
+                    ? `${restName} - ${branchNamePart}`
+                    : restName
+                  : branchNamePart || '';
+
+                // CORREGIDO: antes se usaba SIEMPRE el environment del restaurante
+                // padre para todas sus sucursales, ignorando si la sucursal trae
+                // su propio campo 'environment'. Ahora se prioriza el dato de la
+                // sucursal (más específico) y solo se usa el del padre como respaldo.
+                const branchEnvRaw =
+                  b.environment ?? b.ambiente ?? b?.raw?.environment ?? null;
+                const normalizedBranchEnv = normalizeEnvironment(branchEnvRaw);
+                const finalEnv = normalizedBranchEnv || parentEnv;
+
+                const mapped = {
+                  id:
+                    b.id ??
+                    `${rest.id}-${Math.random().toString(36).slice(2, 8)}`,
+                  name: combinedName,
+                  city: b.city ?? b.ciudad ?? null,
+                  avg_rating:
+                    (b.avg_rating ?? b.rating ?? null) !== null
+                      ? Number(b.avg_rating ?? b.rating)
+                      : null,
+                  address: b.direccion ?? b.address ?? null,
+                  short_description:
+                    b.descripcion ?? b.short_description ?? null,
+                  full_description: b.descripcion ?? b.full_description ?? null,
+                  latitude: b.latitud ?? b.latitude ?? b.lat ?? null,
+                  longitude: b.longitud ?? b.longitude ?? b.lng ?? null,
+                  image: cardImage,
+                  imagen_banner_url: imagen_banner_url,
+                  imagen_logo_url: imagen_logo_url,
+                  imagenes: imagenes_array,
+                  cuisine: b.tipo_comida ?? b.tipo ?? b.cuisine ?? null,
+                  avg_price: Number(b.avg_price ?? b.price ?? 0) || 0,
+                  price_min: priceMin,
+                  price_max: priceMax,
+                  price_range_raw: rangoRaw ?? null,
+                  price_symbol: parsedRange?.symbol ?? null,
+                  tipo_comida_raw: tipo_comida_raw,
+                  telefono_sucursal: b.telefono_sucursal ?? b.telefono ?? null,
+                  horarios: Array.isArray(b.horarios)
+                    ? b.horarios
+                    : b.horario
+                    ? [b.horario]
+                    : [],
+                  url_facebook: b.url_facebook ?? b.facebook_url ?? null,
+                  url_instagram: b.url_instagram ?? b.instagram_url ?? null,
+                  url_tiktok: b.url_tiktok ?? b.tiktok ?? null,
+                  url_whatsapp: b.url_whatsapp ?? b.whatsapp ?? null,
+                  url_opentable: url_opentable,
+                  environment: finalEnv,
+                  raw: b,
+                };
+
+                const itemEnv = normalizeEnvironment(mapped.environment);
+
+                if (
+                  normalizedEnvironment &&
+                  itemEnv &&
+                  itemEnv !== normalizedEnvironment
+                ) {
+                  console.warn(
+                    '[RestaurantsScreen] sucursal con environment distinto al esperado:',
+                    {
+                      restaurantId: rest.id,
+                      branchId: mapped.id,
+                      branchName: mapped.name,
+                      itemEnv,
+                      expected: normalizedEnvironment,
+                    },
+                  );
+                }
+
+                try {
+                  const mostrarFlag = !!(
+                    b.mostrar_rating === true ||
+                    (b.mostrar_rating &&
+                      String(b.mostrar_rating).toLowerCase() === 'true') ||
+                    (mapped.raw &&
+                      (mapped.raw.mostrar_rating === true ||
+                        String(
+                          mapped.raw.mostrar_rating || '',
+                        ).toLowerCase() === 'true')) ||
+                    mapped.mostrar_rating === true ||
+                    (mapped.mostrar_rating &&
+                      String(mapped.mostrar_rating).toLowerCase() === 'true')
+                  );
+
+                  if (mostrarFlag) {
+                    const surveyAvg = await fetchSurveyAvgForSucursal(
+                      mapped.id,
+                    );
+                    mapped.avg_rating = surveyAvg;
+                  }
+                } catch (e) {
+                  console.warn(
+                    '[RestaurantsScreen] Error calculando surveyAvg para sucursal:',
+                    b.id,
+                    e,
+                  );
+                }
+
+                return mapped;
+              });
+
+              const resolved = await Promise.allSettled(mappedPromises);
+              const values = resolved
+                .filter(s => s.status === 'fulfilled')
+                .map(s => s.value);
+              return values;
+            } catch (err) {
               console.warn(
-                `sucursales request failed for rest ${rest.id} status ${r.status}`,
+                '[RestaurantsScreen] Error fetching branches for restaurant:',
+                rest.id,
+                err,
               );
               return [];
             }
+          },
+        );
 
-            const j = await r.json().catch(() => null);
-            if (!j) return [];
+        const branchesArrays = branchesArraysRaw.filter(Boolean).flat();
 
-            let branches = [];
-            if (Array.isArray(j.sucursales)) branches = j.sucursales;
-            else if (Array.isArray(j.data) && Array.isArray(j.data.sucursales))
-              branches = j.data.sucursales;
-            else if (Array.isArray(j.data)) branches = j.data;
-            else if (Array.isArray(j.results)) branches = j.results;
-            else if (Array.isArray(j.items)) branches = j.items;
-            else if (Array.isArray(j)) branches = j;
-            else branches = [];
+        console.warn(
+          '[RestaurantsScreen] sucursales total antes de filtrar environment:',
+          branchesArrays.length,
+        );
 
-            if (!branches || branches.length === 0) {
-              return [];
-            }
+        const filteredByEnvironment = branchesArrays.filter(item => {
+          if (!normalizedEnvironment) return true;
 
-            const mappedPromises = branches.map(async b => {
-              const rangoRaw =
-                b.rango_precios ?? b.price_range ?? b.price_range_raw ?? null;
-              const parsedRange = parsePriceRange(rangoRaw);
-
-              let priceMin = null;
-              let priceMax = null;
-              const avgPrice =
-                Number(b.avg_price ?? b.price ?? b.average_price ?? 0) || 0;
-              if (Number.isFinite(avgPrice) && avgPrice > 0) {
-                priceMin = avgPrice;
-                priceMax = avgPrice;
-              } else if (parsedRange) {
-                priceMin = parsedRange.min;
-                priceMax = parsedRange.max;
-              } else {
-                priceMin = null;
-                priceMax = null;
-              }
-
-              const tipo_comida_raw =
-                b.tipo_comida ?? b.tipo ?? b.category ?? b.cuisine ?? '';
-              const imagen_banner_url =
-                b.imagen_banner_url ??
-                b.imagen_banner ??
-                b.banner_url ??
-                b.banner ??
-                null;
-              const imagen_logo_url =
-                b.imagen_logo_url ?? b.imagen_logo ?? b.logo ?? null;
-              const imagenes_array = Array.isArray(b.imagenes)
-                ? b.imagenes
-                : Array.isArray(b.images)
-                ? b.images
-                : null;
-              const cardImage =
-                imagen_banner_url ??
-                imagen_logo_url ??
-                b.imagen ??
-                b.image ??
-                null;
-              const url_opentable =
-                b.url_opentable ??
-                b.opentable_url ??
-                b.url_reservation ??
-                b.booking_url ??
-                null;
-              const restName =
-                restNameMap[String(rest.id)] ?? rest.nombre ?? rest.name ?? '';
-              const branchNamePart = (b.nombre ?? b.name ?? '')
-                .toString()
-                .trim();
-              const combinedName = restName
-                ? branchNamePart
-                  ? `${restName} - ${branchNamePart}`
-                  : restName
-                : branchNamePart || '';
-
-              const mapped = {
-                id:
-                  b.id ??
-                  `${rest.id}-${Math.random().toString(36).slice(2, 8)}`,
-                name: combinedName,
-                city: b.city ?? b.ciudad ?? null,
-                avg_rating:
-                  (b.avg_rating ?? b.rating ?? null) !== null
-                    ? Number(b.avg_rating ?? b.rating)
-                    : null,
-                address: b.direccion ?? b.address ?? null,
-                short_description: b.descripcion ?? b.short_description ?? null,
-                full_description: b.descripcion ?? b.full_description ?? null,
-                latitude: b.latitud ?? b.latitude ?? b.lat ?? null,
-                longitude: b.longitud ?? b.longitude ?? b.lng ?? null,
-                image: cardImage,
-                imagen_banner_url: imagen_banner_url,
-                imagen_logo_url: imagen_logo_url,
-                imagenes: imagenes_array,
-                cuisine: b.tipo_comida ?? b.tipo ?? b.cuisine ?? null,
-                avg_price: Number(b.avg_price ?? b.price ?? 0) || 0,
-                price_min: priceMin,
-                price_max: priceMax,
-                price_range_raw: rangoRaw ?? null,
-                price_symbol: parsedRange?.symbol ?? null,
-                tipo_comida_raw: tipo_comida_raw,
-                telefono_sucursal: b.telefono_sucursal ?? b.telefono ?? null,
-                horarios: Array.isArray(b.horarios)
-                  ? b.horarios
-                  : b.horario
-                  ? [b.horario]
-                  : [],
-                url_facebook: b.url_facebook ?? b.facebook_url ?? null,
-                url_instagram: b.url_instagram ?? b.instagram_url ?? null,
-                url_tiktok: b.url_tiktok ?? b.tiktok ?? null,
-                url_whatsapp: b.url_whatsapp ?? b.whatsapp ?? null,
-                url_opentable: url_opentable,
-                raw: b,
-              };
-
-              try {
-                const mostrarFlag = !!(
-                  b.mostrar_rating === true ||
-                  (b.mostrar_rating &&
-                    String(b.mostrar_rating).toLowerCase() === 'true') ||
-                  (mapped.raw &&
-                    (mapped.raw.mostrar_rating === true ||
-                      String(mapped.raw.mostrar_rating || '').toLowerCase() ===
-                        'true')) ||
-                  mapped.mostrar_rating === true ||
-                  (mapped.mostrar_rating &&
-                    String(mapped.mostrar_rating).toLowerCase() === 'true')
-                );
-                if (mostrarFlag) {
-                  const surveyAvg = await fetchSurveyAvgForSucursal(mapped.id);
-                  mapped.avg_rating = surveyAvg;
-                }
-              } catch (e) {
-                console.warn(
-                  'Error calculando surveyAvg para sucursal',
-                  b.id,
-                  e,
-                );
-              }
-
-              return mapped;
-            });
-
-            const resolved = await Promise.allSettled(mappedPromises);
-            const values = resolved
-              .filter(s => s.status === 'fulfilled')
-              .map(s => s.value);
-            return values;
-          } catch (err) {
+          const itemEnv = normalizeEnvironment(
+            item?.environment ?? item?.raw?.environment ?? '',
+          );
+          // CORREGIDO: si no se pudo determinar el environment de la sucursal
+          // (por ejemplo porque falló la petición de detalle del restaurante
+          // padre), antes se ocultaba silenciosamente. Ahora, ante la duda,
+          // se muestra la sucursal en vez de perderla sin explicación.
+          if (!itemEnv) {
             console.warn(
-              'Error fetching branches for restaurant',
-              rest.id,
-              err,
+              '[RestaurantsScreen] sucursal sin environment detectable, se muestra por defecto:',
+              {
+                id: item?.id,
+                name: item?.name,
+                expected: normalizedEnvironment,
+              },
             );
-            return [];
+            return true;
           }
+
+          const ok = itemEnv === normalizedEnvironment;
+
+          if (!ok) {
+            console.warn(
+              '[RestaurantsScreen] sucursal descartada por environment:',
+              {
+                id: item?.id,
+                name: item?.name,
+                itemEnv,
+                expected: normalizedEnvironment,
+              },
+            );
+          }
+
+          return ok;
         });
 
-        const settled = await Promise.allSettled(branchPromises);
-        const branchesArrays = settled
-          .filter(s => s.status === 'fulfilled')
-          .map(s => s.value)
-          .flat();
+        console.warn(
+          '[RestaurantsScreen] sucursales después del filtro environment:',
+          filteredByEnvironment.length,
+        );
+
+        if (
+          normalizedEnvironment &&
+          allRestaurants.length > 0 &&
+          filteredByEnvironment.length === 0
+        ) {
+          console.warn(
+            '[RestaurantsScreen] No quedó ninguna sucursal visible. Revisa:',
+            {
+              asyncEnvironment: rawEnvironment,
+              normalizedEnvironment,
+              restaurantsReceived: allRestaurants.length,
+              restaurantsWithEnvSample: allRestaurants.slice(0, 5).map(r => ({
+                id: r?.id,
+                nombre: r?.nombre ?? r?.name,
+                environment: r?.environment,
+              })),
+            },
+          );
+        }
 
         if (!mounted) return;
 
-        setRestaurants(branchesArrays);
-        setFilteredData(branchesArrays);
+        setRestaurants(filteredByEnvironment);
+        setFilteredData(filteredByEnvironment);
 
         const uniqueCitiesFromApi = Array.from(
-          new Set(branchesArrays.map(i => i.city).filter(Boolean)),
+          new Set(filteredByEnvironment.map(i => i.city).filter(Boolean)),
         );
         const sampleCities = ['Ciudad de México', 'Polanco', 'Roma'];
         const mergedCities = Array.from(
@@ -639,15 +1051,16 @@ export default function RestaurantsScreen() {
         );
         setCities(mergedCities);
       } catch (err) {
-        console.warn('Error al cargar restaurantes/sucursales:', err);
+        console.warn(
+          '[RestaurantsScreen] Error al cargar restaurantes/sucursales:',
+          err,
+        );
       } finally {
         if (mounted) setLoading(false);
       }
     })();
 
-    return () => {
-      /* cleanup */
-    };
+    return () => {};
   }, []);
 
   const loadFavoritesFromStorage = async () => {
@@ -661,7 +1074,11 @@ export default function RestaurantsScreen() {
         if (Array.isArray(globalObjs) && globalObjs.length > 0)
           objs = globalObjs;
       }
-      setFavorites(Array.isArray(objs) ? objs : []);
+      const visibleOnly = Array.isArray(objs)
+        ? objs.filter(f => restaurants.some(r => String(r.id) === String(f.id)))
+        : [];
+
+      setFavorites(visibleOnly);
     } catch (e) {
       console.warn('loadFavoritesFromStorage error', e);
     }
@@ -673,16 +1090,22 @@ export default function RestaurantsScreen() {
       loadFavoritesFromStorage(),
     );
     return unsub;
-  }, [navigation]);
+  }, [navigation, restaurants]);
 
   const applyFilters = () => {
     const q = searchQuery.trim().toLowerCase();
+
     const filtered = restaurants.filter(item => {
+      const itemEnv = normalizeEnvironment(
+        item?.environment ?? item?.raw?.environment ?? '',
+      );
+      const matchEnvironment = !environment || itemEnv === environment;
+
       const matchSearch =
         q.length === 0 || (item.name || '').toLowerCase().includes(q);
       const matchRating = (item.avg_rating ?? 0) >= minRating;
       const matchCity =
-        city === 'Todos' || (item.city ?? '').toString() === city; // still kept
+        city === 'Todos' || (item.city ?? '').toString() === city;
 
       let matchCuisine = true;
       if (cuisine && cuisine !== 'todos') {
@@ -749,7 +1172,13 @@ export default function RestaurantsScreen() {
         if (pMax < minPrice || pMin > maxPrice) matchPrice = false;
         else matchPrice = true;
       } else {
-        if (minPrice === 0 && maxPrice === 500) matchPrice = true;
+        // CAMBIADO: el estado "sin filtro de precio" ahora es
+        // minPrice === DEFAULT_MIN_PRICE && maxPrice === DEFAULT_MAX_PRICE
+        // (antes era 0-500), para que coincida con los nuevos valores por
+        // defecto del filtro y no oculte restaurantes sin datos de precio
+        // cuando el usuario no ha tocado el filtro.
+        if (minPrice === DEFAULT_MIN_PRICE && maxPrice === DEFAULT_MAX_PRICE)
+          matchPrice = true;
         else matchPrice = false;
       }
 
@@ -794,6 +1223,7 @@ export default function RestaurantsScreen() {
       }
 
       return (
+        matchEnvironment &&
         matchSearch &&
         matchRating &&
         matchCity &&
@@ -820,13 +1250,10 @@ export default function RestaurantsScreen() {
     useLocation,
     userLocation,
     searchRadiusKm,
+    environment,
   ]);
-  useEffect(() => {
-    applyFilters();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, minRating, city, restaurants, cuisine, minPrice, maxPrice]);
 
-  //-----  HELPER PARA FAVORITOS
+  //-----  HELPER PARA FAVORITOS------ no borrar jamás
 
   const isGuestMode = async () => {
     try {
@@ -857,7 +1284,11 @@ export default function RestaurantsScreen() {
         // si ya existe -> eliminar
         updated = current.filter(c => String(c.id) !== sid);
         await AsyncStorage.setItem(favObjsKey, JSON.stringify(updated));
-        setFavorites(updated);
+        setFavorites(
+          updated.filter(f =>
+            restaurants.some(r => String(r.id) === String(f.id)),
+          ),
+        );
         runShowToast('Eliminado de favoritos');
       } else {
         // Agregar: guardamos el objeto completo para conservar logo, descripcion, telefono, etc.
@@ -866,11 +1297,16 @@ export default function RestaurantsScreen() {
           ...item,
           // asegurarnos de que id está como string
           id: sid,
+          environment: item.environment ?? environment ?? null,
           _saved_at: Date.now(),
         };
         updated = [...(Array.isArray(current) ? current : []), toSave];
         await AsyncStorage.setItem(favObjsKey, JSON.stringify(updated));
-        setFavorites(updated);
+        setFavorites(
+          updated.filter(f =>
+            restaurants.some(r => String(r.id) === String(f.id)),
+          ),
+        );
         runShowToast('Agregado a favoritos');
       }
     } catch (e) {
@@ -887,6 +1323,12 @@ export default function RestaurantsScreen() {
       </View>
     );
   }
+
+  const visibleFavorites = favorites.filter(f =>
+    restaurants.some(r => String(r.id) === String(f.id)),
+  );
+
+  //NO BORRAR
   const toggleFavoriteGuarded = async item => {
     if (await isGuestMode()) {
       navigation.navigate('Perfil');
@@ -916,14 +1358,18 @@ export default function RestaurantsScreen() {
         if (Array.isArray(globalObjs) && globalObjs.length > 0)
           objs = globalObjs;
       }
-      navigation.navigate('Favorites', {
-        favorites: Array.isArray(objs) ? objs : [],
-      });
+      const visibleOnly = Array.isArray(objs)
+        ? objs.filter(f => restaurants.some(r => String(r.id) === String(f.id)))
+        : [];
+
+      navigation.navigate('Favorites', {favorites: visibleOnly});
     } catch (e) {
       console.warn('openFavoritesFromHeader error', e);
       navigation.navigate('Favorites', {favorites: []});
     }
   };
+
+  ///NO BORRAR
   const openFavoritesFromHeaderGuarded = async () => {
     if (await isGuestMode()) {
       // Go to a guarded tab so GuestGate shows the blocked screen
@@ -977,7 +1423,11 @@ export default function RestaurantsScreen() {
           <Ionicons
             name="heart-outline"
             size={iconSize + 2}
-            color={favorites && favorites.length > 0 ? '#e0245e' : '#444'}
+            color={
+              visibleFavorites && visibleFavorites.length > 0
+                ? '#e0245e'
+                : '#444'
+            }
           />
         </TouchableOpacity>
       </View>
@@ -994,9 +1444,17 @@ export default function RestaurantsScreen() {
             restaurant={item}
             imageSource={item.image ? {uri: item.image} : defaultImage}
             onPress={() =>
-              navigation.navigate('Restaurant', {restaurant: item, id: item.id})
+              navigation.navigate('Restaurant', {
+                restaurant: item,
+                id: item.id,
+                isFavorite: visibleFavorites.some(
+                  f => String(f.id) === String(item.id),
+                ),
+              })
             }
-            isFavorite={favorites.some(f => String(f.id) === String(item.id))}
+            isFavorite={visibleFavorites.some(
+              f => String(f.id) === String(item.id),
+            )}
             onToggleFavorite={() => toggleFavoriteGuarded(item)}
             cardImageH={cardImageH}
             cardRadius={cardRadius}
@@ -1008,7 +1466,7 @@ export default function RestaurantsScreen() {
           </View>
         )}
       />
-
+      {/*MODAL B*/}
       {showFilterModal && (
         <Modal
           visible={showFilterModal}
@@ -1041,15 +1499,7 @@ export default function RestaurantsScreen() {
                     marginTop: 8,
                   }}>
                   <Text style={{color: '#333', fontWeight: '600'}}>
-                    {useLocation
-                      ? `Activa — ${
-                          userLocation
-                            ? `${userLocation.latitude.toFixed(
-                                5,
-                              )}, ${userLocation.longitude.toFixed(5)}`
-                            : 'obteniendo...'
-                        }`
-                      : 'Desactivada'}
+                    {useLocation ? 'Activa' : 'Desactivada'}
                   </Text>
                   <Switch
                     value={useLocation}
@@ -1070,16 +1520,27 @@ export default function RestaurantsScreen() {
                 <View style={{marginTop: 8, paddingHorizontal: 6}}>
                   <Slider
                     style={styles.slider}
-                    minimumValue={1}
+                    minimumValue={0}
                     maximumValue={50}
                     step={1}
                     value={searchRadiusKm}
-                    onValueChange={val => setSearchRadiusKm(val)}
+                    onValueChange={val => {
+                      // CAMBIADO: si la ubicación no está activada todavía,
+                      // el filtro de radio no se aplica en vivo; se espera a
+                      // que el usuario suelte el slider para pedir
+                      // confirmación (ver onSlidingComplete).
+                      if (useLocation) {
+                        setSearchRadiusKm(val);
+                      }
+                    }}
+                    onSlidingComplete={handleRadiusSlidingComplete}
                     minimumTrackTintColor={STAR_COLOR}
                     maximumTrackTintColor="#ddd"
                   />
                   <Text style={{color: '#444', marginTop: 6}}>
-                    Mostrando restaurantes dentro de {searchRadiusKm} km
+                    {useLocation
+                      ? `Mostrando restaurantes dentro de ${searchRadiusKm} km`
+                      : 'Actívala para usar el radio de búsqueda'}
                   </Text>
                 </View>
 
@@ -1177,11 +1638,11 @@ export default function RestaurantsScreen() {
                     setCity('Todos');
                     setMinRating(0);
                     setCuisine('todos');
-                    setMinPrice(0);
-                    setMaxPrice(500);
+                    setMinPrice(DEFAULT_MIN_PRICE);
+                    setMaxPrice(DEFAULT_MAX_PRICE);
                     setUseLocation(false);
                     setUserLocation(null);
-                    setSearchRadiusKm(5);
+                    setSearchRadiusKm(DEFAULT_SEARCH_RADIUS_KM);
                   }}
                   style={styles.clearButton}>
                   <Text style={styles.clearText}>Limpiar</Text>
@@ -1198,6 +1659,37 @@ export default function RestaurantsScreen() {
               </View>
             </View>
           </SafeAreaView>
+        </Modal>
+      )}
+      {/* MODAL A NUEVO: aviso de confirmación al mover el radio de búsqueda sin
+          tener la ubicación activada. Chico, centrado, no invasivo. */}
+      {showRadiusConfirm && (
+        <Modal
+          visible={showRadiusConfirm}
+          transparent
+          animationType="fade"
+          onRequestClose={handleCancelRadiusConfirm}>
+          <View style={styles.confirmOverlay}>
+            <View style={styles.confirmBox}>
+              <Text style={styles.confirmTitle}>Activar ubicación</Text>
+              <Text style={styles.confirmText}>
+                Para usar el radio de búsqueda necesitamos activar tu ubicación
+                precisa. ¿Deseas activarla?
+              </Text>
+              <View style={styles.confirmActions}>
+                <TouchableOpacity
+                  onPress={handleCancelRadiusConfirm}
+                  style={styles.confirmCancelBtn}>
+                  <Text style={styles.confirmCancelText}>Cancelar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleAcceptRadiusConfirm}
+                  style={styles.confirmAcceptBtn}>
+                  <Text style={styles.confirmAcceptText}>Aceptar</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
         </Modal>
       )}
 
@@ -1248,6 +1740,11 @@ function RestaurantCard({
   cardImageH = 200,
   cardRadius = 12,
 }) {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [restaurant.image]);
   const fullName = restaurant.name || '';
   const nameParts = fullName.split(/\s*-\s*/);
   const mainName = nameParts[0] || '';
@@ -1267,8 +1764,19 @@ function RestaurantCard({
     <View style={[styles.card, {borderRadius: cardRadius}]}>
       <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
         <Image
-          source={imageSource}
+          source={imageFailed ? defaultImage : imageSource}
           style={[styles.cardImage, {height: cardImageH}]}
+          resizeMode="cover"
+          onError={event => {
+            console.log('[Restaurant image error]', {
+              id: restaurant.id,
+              name: restaurant.name,
+              image: restaurant.image,
+              error: event.nativeEvent?.error,
+            });
+
+            setImageFailed(true);
+          }}
         />
         <TouchableOpacity
           onPress={onToggleFavorite}
@@ -1295,13 +1803,13 @@ function RestaurantCard({
               {secondName}
             </Text>
           ) : null}
-          {restaurant.city ? (
-            <Text style={styles.sub}>{restaurant.city}</Text>
+          {restaurant.short_description || restaurant.full_description ? (
+            <Text style={styles.sub} numberOfLines={1}>
+              {restaurant.short_description || restaurant.full_description}
+            </Text>
           ) : null}
           {restaurant.tipo_comida_raw ? (
             <Text style={styles.shortDesc}>{restaurant.tipo_comida_raw}</Text>
-          ) : restaurant.short_description ? (
-            <Text style={styles.shortDesc}>{restaurant.short_description}</Text>
           ) : null}
         </View>
 
@@ -1336,7 +1844,6 @@ function RestaurantCard({
 
 const AVATAR_SIZE = 60;
 const SLIDER_HEIGHT = 250;
-
 const OVERLAY = 'rgba(0,0,0,0.36)';
 
 const styles = StyleSheet.create({
@@ -1489,4 +1996,47 @@ const styles = StyleSheet.create({
   },
   toastText: {color: '#fff', flex: 1, marginRight: 12},
   toastLink: {color: '#4EA1FF', fontWeight: '700', marginLeft: 8},
+
+  // NUEVO: estilos para el aviso de confirmación del radio de búsqueda.
+  confirmOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  confirmBox: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 18,
+  },
+  confirmTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#222',
+    marginBottom: 8,
+  },
+  confirmText: {fontSize: 14, color: '#555', lineHeight: 20},
+  confirmActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 16,
+  },
+  confirmCancelBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginRight: 8,
+    justifyContent: 'center',
+  },
+  confirmCancelText: {color: '#555', fontWeight: '600'},
+  confirmAcceptBtn: {
+    backgroundColor: '#0046ff',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    justifyContent: 'center',
+  },
+  confirmAcceptText: {color: '#fff', fontWeight: '700'},
 });

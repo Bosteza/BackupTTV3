@@ -1,4 +1,3 @@
-//token
 import React, {useEffect, useState, useMemo} from 'react';
 import {
   SafeAreaView,
@@ -21,9 +20,11 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useNavigation, useRoute} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+
 import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 const API_BASE_URL = 'https://api.tab-track.com';
+
 const formatMoney = n => {
   const value = Number(n);
   if (!Number.isFinite(value)) return '0.00';
@@ -33,17 +34,125 @@ const formatMoney = n => {
 
   return `${formattedInteger}.${decimalPart}`;
 };
-
 const round2 = v => {
   const n = Number(v || 0);
   return Number.isFinite(n) ? Number(n.toFixed(2)) : 0;
 };
 
+function getOriginalRaw(it) {
+  const raw = it?.raw ?? {};
+  return raw?.raw ?? raw ?? {};
+}
+
+function groupConsumptionItems(flatItems = []) {
+  const grouped = [];
+  const lastParentByCode = new Map();
+
+  flatItems.forEach((it, idx) => {
+    if (!it) return;
+
+    const original = getOriginalRaw(it);
+    const isSubitem = !!(
+      it?.is_subitem ??
+      original?.is_subitem ??
+      original?.isSubItem ??
+      original?.isSubitem
+    );
+    const itemCode = String(
+      it?.codigo_item ??
+        original?.codigo_item ??
+        original?.codigo ??
+        original?.item_id ??
+        original?.id ??
+        '',
+    ).trim();
+    const parentCode = String(
+      it?.parent_codigo_item ??
+        original?.parent_codigo_item ??
+        original?.parent_code ??
+        original?.parentCode ??
+        '',
+    ).trim();
+
+    if (!isSubitem) {
+      const parentEntry = {
+        ...it,
+        isSubitem: false,
+        subitems: [],
+        members: [it],
+      };
+
+      grouped.push(parentEntry);
+
+      if (itemCode) {
+        lastParentByCode.set(itemCode, parentEntry);
+      }
+    } else {
+      const subEntry = {
+        ...it,
+        isSubitem: true,
+        parent_codigo_item: parentCode || null,
+        subitems: [],
+        members: [it],
+      };
+
+      const parent = parentCode ? lastParentByCode.get(parentCode) : null;
+
+      if (parent) {
+        parent.subitems = parent.subitems || [];
+        parent.members = parent.members || [];
+        parent.subitems.push(subEntry);
+        parent.members.push(subEntry);
+      } else {
+        grouped.push(subEntry);
+      }
+    }
+  });
+
+  return grouped.map(group => {
+    const members = Array.isArray(group.members) ? group.members : [];
+    const selectableMembers = members.filter(m => !m.locked);
+    const checkedMembers = selectableMembers.filter(m => m.checked);
+    const groupPrice = round2(
+      members.reduce((s, m) => s + Number(m.price || 0), 0),
+    );
+
+    return {
+      ...group,
+      members,
+      subitems: Array.isArray(group.subitems) ? group.subitems : [],
+      groupPrice,
+      groupLocked: members.length > 0 && members.every(m => m.locked),
+      groupChecked:
+        selectableMembers.length > 0 &&
+        checkedMembers.length === selectableMembers.length,
+    };
+  });
+}
+
+// --- NUEVO: firma que identifica si dos "líneas" (item + sus subitems) son
+// EXACTAMENTE iguales: mismo nombre, mismo precio total de línea (incluyendo
+// modificadores) y mismos subitems (nombre+precio). Solo líneas con firma
+// idéntica se agrupan bajo un mismo selector con +/-. Un "café con leche" y
+// un "café solo" nunca comparten firma porque sus subitems difieren.
+function getLineSignature(line) {
+  const subs = Array.isArray(line.subitems) ? line.subitems : [];
+  const subsSig = subs
+    .map(
+      s =>
+        `${(s.name || '').trim().toLowerCase()}::${round2(s.price).toFixed(2)}`,
+    )
+    .sort()
+    .join('|');
+  return `${(line.name || '').trim().toLowerCase()}::${round2(
+    line.price,
+  ).toFixed(2)}::[${subsSig}]`;
+}
+
 export default function Dividir() {
   const navigation = useNavigation();
   const route = useRoute();
 
-  // responsive helpers
   const {width, height} = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
@@ -55,7 +164,6 @@ export default function Dividir() {
   };
   const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
-  // safe paddings to avoid notch/statusbar overlap
   const topSafe = Math.round(
     Math.max(
       insets?.top ?? 0,
@@ -67,7 +175,6 @@ export default function Dividir() {
   const bottomSafe = Math.round(insets?.bottom ?? 0);
   const sidePad = Math.round(Math.min(Math.max(wp(4), 12), 36)); // lateral padding con límites
 
-  // breakpoints
   const isNarrow = width < 420;
   const contentMaxWidth = Math.round(Math.min(width - Math.round(wp(8)), 960));
 
@@ -106,6 +213,7 @@ export default function Dividir() {
   const [externalTotalConsumo, setExternalTotalConsumo] = useState(
     incomingTotalConsumo ?? null,
   );
+
   const [restaurantImage, setRestaurantImage] = useState(
     route?.params?.restaurantImage ?? null,
   );
@@ -123,7 +231,6 @@ export default function Dividir() {
   };
   const hideStyledAlert = () => setStyledAlertVisible(false);
 
-  // CHECK: flag que indica si debemos ocultar el botón "Partes iguales"
   const hideEqualButtonFlag = !!route?.params?.hideEqualButton;
 
   const parsePrice = v => {
@@ -286,9 +393,11 @@ export default function Dividir() {
 
       if (route.params.mesero) setMesero(route.params.mesero);
       if (route.params.moneda) setMoneda(route.params.moneda);
+
       if (route.params.restaurantImage) {
         setRestaurantImage(route.params.restaurantImage);
       }
+
       if (
         route.params.total_consumo !== undefined &&
         route.params.total_consumo !== null
@@ -320,6 +429,7 @@ export default function Dividir() {
       setLoading(true);
       try {
         await ensureToken();
+
         const url = `${API_BASE_URL.replace(
           /\/$/,
           '',
@@ -399,6 +509,7 @@ export default function Dividir() {
     ) => {
       try {
         await ensureToken();
+
         const useSale =
           saleId ||
           (route?.params?.saleId ??
@@ -694,6 +805,7 @@ export default function Dividir() {
       mounted = false;
     };
   }, [saleId, route?.params]);
+
   useEffect(() => {
     let mounted = true;
     const fetchRestaurantImage = async () => {
@@ -704,7 +816,9 @@ export default function Dividir() {
         }
 
         if (!restauranteId || !sucursalId) return;
+
         await ensureToken();
+
         const url = `${API_BASE_URL.replace(
           /\/$/,
           '',
@@ -747,14 +861,115 @@ export default function Dividir() {
     };
   }, [restauranteId, sucursalId, route?.params?.restaurantImage]);
 
-  const toggleItem = index => {
+  const groupedItems = useMemo(() => groupConsumptionItems(items), [items]);
+
+  // --- NUEVO: arma la lista de renderizado agrupando líneas idénticas por
+  // producto (firma), SIN separar en dos filas lo ya pagado de lo pendiente
+  // del mismo producto. Si un producto tiene unidades disponibles (sin
+  // pagar), se muestra UNA sola fila con selector +/- cuyo máximo es esa
+  // cantidad disponible — las unidades ya pagadas de ese mismo producto no
+  // aparecen aparte. Solo cuando ya no queda ninguna unidad disponible
+  // (todas pagadas) esa fila cambia a mostrarse bloqueada con candado.
+  // Líneas con bloqueo parcial dentro de sí mismas (por ejemplo el item
+  // pagado pero un subitem no) se muestran individuales, exactamente como
+  // antes, para no arriesgar la conciliación de pagos.
+  const renderList = useMemo(() => {
+    const map = new Map();
+    const list = [];
+    const seen = new Set();
+
+    groupedItems.forEach((line, idx) => {
+      const members = Array.isArray(line.members) ? line.members : [];
+      const lockedCount = members.filter(m => m.locked).length;
+      const allLocked = members.length > 0 && lockedCount === members.length;
+      const allUnlocked = lockedCount === 0;
+
+      if (!allLocked && !allUnlocked) {
+        list.push({
+          type: 'single',
+          key: `single-${line.id || idx}`,
+          line,
+          index: idx,
+        });
+        return;
+      }
+
+      const sig = getLineSignature(line);
+
+      if (map.has(sig)) {
+        const g = map.get(sig);
+        if (allLocked) g.lockedLines.push(line);
+        else g.unlockedLines.push(line);
+      } else {
+        map.set(sig, {
+          sig,
+          name: line.name,
+          unitPrice: round2(line.groupPrice ?? 0),
+          subitemsTemplate: Array.isArray(line.subitems) ? line.subitems : [],
+          lockedLines: allLocked ? [line] : [],
+          unlockedLines: allLocked ? [] : [line],
+        });
+      }
+
+      if (!seen.has(sig)) {
+        seen.add(sig);
+        list.push({type: 'group', key: sig, sig});
+      }
+    });
+
+    return list.map(entry => {
+      if (entry.type === 'single') return entry;
+      return {...entry, group: map.get(entry.sig)};
+    });
+  }, [groupedItems]);
+
+  // --- NUEVO: aplica la cantidad seleccionada (0..disponibles) para un
+  // grupo de items idénticos, marcando `checked` en las primeras N líneas
+  // libres del grupo y desmarcando el resto. No toca items fuera del grupo
+  // ni las líneas ya bloqueadas (pagadas) de ese mismo producto.
+  const setGroupSelectionCount = (group, newCount) => {
+    if (!group) return;
+    const max = group.unlockedLines.length;
+    const clamped = Math.max(0, Math.min(newCount, max));
+
+    const idsToCheck = new Set();
+    group.unlockedLines.slice(0, clamped).forEach(line => {
+      (line.members || []).forEach(m => {
+        if (!m.locked) idsToCheck.add(String(m.id));
+      });
+    });
+
+    const allGroupIds = new Set();
+    group.unlockedLines.forEach(line =>
+      (line.members || []).forEach(m => allGroupIds.add(String(m.id))),
+    );
+
     setItems(prev =>
-      prev.map((it, i) => {
-        if (i !== index) return it;
+      prev.map(it => {
+        if (!allGroupIds.has(String(it.id))) return it;
         if (it.locked) return it;
-        return {...it, checked: !it.checked};
+        return {...it, checked: idsToCheck.has(String(it.id))};
       }),
     );
+  };
+
+  const toggleGroup = index => {
+    setItems(prev => {
+      const groupsNow = groupConsumptionItems(prev);
+      const target = groupsNow[index];
+      if (!target || target.groupLocked) return prev;
+
+      const nextChecked = !target.groupChecked;
+      const memberIds = new Set(
+        (target.members || []).filter(m => !m.locked).map(m => String(m.id)),
+      );
+
+      return prev.map(it => {
+        if (!memberIds.has(String(it.id))) return it;
+        if (it.locked) return it;
+        return {...it, checked: nextChecked};
+      });
+    });
   };
 
   const itemsSum = useMemo(() => {
@@ -769,6 +984,7 @@ export default function Dividir() {
       usesExternalTotal ? round2(Number(externalTotalConsumo || 0)) : itemsSum,
     [usesExternalTotal, externalTotalConsumo, itemsSum],
   );
+
   const lockedSum = useMemo(() => {
     return round2(
       (items || []).reduce(
@@ -805,11 +1021,25 @@ export default function Dividir() {
     [displayTotal, iva],
   );
 
-  const selectedItems = useMemo(
-    () => (items || []).filter(i => i.checked && !i.locked),
-    [items],
-  );
+  const selectedItems = useMemo(() => {
+    const flat = [];
+    for (const group of groupedItems || []) {
+      const members = Array.isArray(group.members) ? group.members : [];
+      const selected = members.filter(m => m.checked && !m.locked);
+      flat.push(...selected);
+    }
+    return flat;
+  }, [groupedItems]);
+
   const anySelected = selectedItems.length > 0;
+
+  const selectedTotal = useMemo(
+    () =>
+      round2(
+        (selectedItems || []).reduce((s, it) => s + Number(it.price || 0), 0),
+      ),
+    [selectedItems],
+  );
 
   const selectedIdsArray = useMemo(
     () => (selectedItems || []).map(it => String(it.id)),
@@ -1209,79 +1439,256 @@ export default function Dividir() {
                 </Text>
               </View>
             ) : (
-              items.map((it, idx) => (
-                <TouchableOpacity
-                  key={it.id || idx}
-                  activeOpacity={it.locked ? 1 : 0.85}
-                  style={[styles.itemRow, it.locked && {opacity: 0.5}]}
-                  onPress={() => !it.locked && toggleItem(idx)}
-                  accessibilityRole="checkbox"
-                  accessibilityState={{
-                    checked: it.checked,
-                    disabled: it.locked,
-                  }}
-                  hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
-                  <View style={styles.itemLeft}>
-                    <View
-                      style={[
-                        styles.checkbox,
-                        it.checked && !it.locked && styles.checkboxChecked,
-                      ]}>
-                      {it.checked && !it.locked && (
-                        <View style={styles.checkboxInner} />
-                      )}
-                      {it.locked && (
-                        <Ionicons
-                          name="lock-closed"
-                          size={Math.round(rf(3))}
-                          color="#9ca3af"
-                        />
-                      )}
-                    </View>
+              renderList.map(entry => {
+                if (entry.type === 'single') {
+                  const group = entry.line;
+                  const members = Array.isArray(group.members)
+                    ? group.members
+                    : [];
+                  const subitems = Array.isArray(group.subitems)
+                    ? group.subitems
+                    : [];
+                  const isLocked = !!group.groupLocked;
+                  const isChecked = !!group.groupChecked;
+                  const displayPrice = round2(
+                    members.reduce((s, m) => s + Number(m.price || 0), 0),
+                  );
+                  const firstItem =
+                    members.find(m => !m.isSubitem) || members[0] || group;
+                  const groupName =
+                    firstItem?.name || group?.name || 'Producto';
 
-                    <View style={{flex: 1}}>
-                      <Text
-                        style={[
-                          styles.itemText,
-                          it.locked && {color: '#9ca3af'},
-                        ]}
-                        numberOfLines={1}>
-                        {it.name}
-                      </Text>
-                      {it.qty > 1 && (
+                  return (
+                    <TouchableOpacity
+                      key={entry.key}
+                      activeOpacity={isLocked ? 1 : 0.85}
+                      style={[styles.itemRow, isLocked && {opacity: 0.5}]}
+                      onPress={() => !isLocked && toggleGroup(entry.index)}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{
+                        checked: isChecked,
+                        disabled: isLocked,
+                      }}
+                      hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
+                      <View style={styles.itemLeft}>
+                        <View
+                          style={[
+                            styles.checkbox,
+                            isChecked && !isLocked && styles.checkboxChecked,
+                          ]}>
+                          {isChecked && !isLocked && (
+                            <View style={styles.checkboxInner} />
+                          )}
+                          {isLocked && (
+                            <Ionicons
+                              name="lock-closed"
+                              size={Math.round(rf(3))}
+                              color="#9ca3af"
+                            />
+                          )}
+                        </View>
+
+                        <View style={{flex: 1}}>
+                          <Text
+                            style={[
+                              styles.itemText,
+                              isLocked && {color: '#9ca3af'},
+                            ]}
+                            numberOfLines={1}>
+                            {groupName}
+                          </Text>
+
+                          {subitems.length > 0 && (
+                            <View style={{marginTop: 6, marginLeft: 2}}>
+                              {subitems.map((sub, j) => (
+                                <View
+                                  key={sub.id || `${entry.key}-${j}`}
+                                  style={{marginBottom: 2}}>
+                                  <Text
+                                    style={{
+                                      fontSize: Math.round(
+                                        clamp(rf(3.0), 10, 13),
+                                      ),
+                                      color: sub.locked ? '#9ca3af' : '#6b7280',
+                                    }}
+                                    numberOfLines={1}>
+                                    • {sub.name}
+                                    {sub.locked ? ' · Pagado' : ''}
+                                  </Text>
+                                </View>
+                              ))}
+                            </View>
+                          )}
+                        </View>
+                      </View>
+
+                      <View style={{alignItems: 'flex-end'}}>
+                        <Text
+                          style={[
+                            styles.itemPrice,
+                            isLocked && {color: '#9ca3af'},
+                          ]}>
+                          {formatMoney(displayPrice)} MXN
+                        </Text>
+                        {isLocked ? (
+                          <Text
+                            style={{
+                              fontSize: Math.round(clamp(rf(2.8), 10, 12)),
+                              color: '#ef4444',
+                              marginTop: Math.round(hp(0.3)),
+                              fontWeight: '700',
+                            }}>
+                            Pagado
+                          </Text>
+                        ) : null}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }
+
+                // Un mismo producto (misma firma) se muestra en UNA sola
+                // fila: si todavía hay unidades disponibles (sin pagar), se
+                // muestra con el selector +/- limitado a esa cantidad — las
+                // unidades ya pagadas de ese mismo producto no aparecen
+                // aparte. Solo si ya no queda ninguna disponible se muestra
+                // bloqueada con candado.
+                const g = entry.group;
+                const available = g.unlockedLines.length;
+                const lockedCount = g.lockedLines.length;
+
+                if (available === 0) {
+                  return (
+                    <View
+                      key={entry.key}
+                      style={[styles.itemRow, {opacity: 0.5}]}>
+                      <View style={styles.itemLeft}>
+                        <View style={styles.checkbox}>
+                          <Ionicons
+                            name="lock-closed"
+                            size={Math.round(rf(3))}
+                            color="#9ca3af"
+                          />
+                        </View>
+                        <View style={{flex: 1}}>
+                          <Text
+                            style={[styles.itemText, {color: '#9ca3af'}]}
+                            numberOfLines={1}>
+                            {g.name}
+                            {lockedCount > 1 ? `  x${lockedCount}` : ''}
+                          </Text>
+                          {g.subitemsTemplate.length > 0 && (
+                            <View style={{marginTop: 6, marginLeft: 2}}>
+                              {g.subitemsTemplate.map((sub, j) => (
+                                <Text
+                                  key={sub.id || `${entry.key}-sub-${j}`}
+                                  style={{
+                                    fontSize: Math.round(
+                                      clamp(rf(3.0), 10, 13),
+                                    ),
+                                    color: '#9ca3af',
+                                  }}
+                                  numberOfLines={1}>
+                                  • {sub.name}
+                                </Text>
+                              ))}
+                            </View>
+                          )}
+                        </View>
+                      </View>
+
+                      <View style={{alignItems: 'flex-end'}}>
+                        <Text style={[styles.itemPrice, {color: '#9ca3af'}]}>
+                          {formatMoney(g.unitPrice * lockedCount)} MXN
+                        </Text>
                         <Text
                           style={{
-                            fontSize: Math.round(clamp(rf(3.2), 10, 14)),
-                            color: '#9ca3af',
+                            fontSize: Math.round(clamp(rf(2.8), 10, 12)),
+                            color: '#ef4444',
+                            marginTop: Math.round(hp(0.3)),
+                            fontWeight: '700',
                           }}>
-                          {it.qty} ×
+                          Pagado
                         </Text>
-                      )}
+                      </View>
+                    </View>
+                  );
+                }
+
+                // Hay unidades disponibles: fila con selector +/-
+                const selectedCount = g.unlockedLines.filter(
+                  l => l.groupChecked,
+                ).length;
+
+                return (
+                  <View key={entry.key} style={styles.itemRow}>
+                    <View style={styles.itemLeft}>
+                      <View style={{flex: 1}}>
+                        <Text style={styles.itemText} numberOfLines={1}>
+                          {g.name}
+                        </Text>
+                        {available > 1 && (
+                          <Text
+                            style={styles.availableSubtext}
+                            numberOfLines={1}>
+                            {available} disponibles
+                          </Text>
+                        )}
+                        {g.subitemsTemplate.length > 0 && (
+                          <View style={{marginTop: 6, marginLeft: 2}}>
+                            {g.subitemsTemplate.map((sub, j) => (
+                              <Text
+                                key={sub.id || `${entry.key}-sub-${j}`}
+                                style={{
+                                  fontSize: Math.round(clamp(rf(3.0), 10, 13)),
+                                  color: '#6b7280',
+                                }}
+                                numberOfLines={1}>
+                                • {sub.name}
+                              </Text>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    </View>
+
+                    <View style={{alignItems: 'flex-end'}}>
+                      <Text style={styles.itemPrice}>
+                        {formatMoney(g.unitPrice)} MXN
+                      </Text>
+                      <View style={styles.stepperContainer}>
+                        <TouchableOpacity
+                          style={[
+                            styles.stepperBtn,
+                            selectedCount <= 0 && styles.stepperBtnDisabled,
+                          ]}
+                          onPress={() =>
+                            setGroupSelectionCount(g, selectedCount - 1)
+                          }
+                          disabled={selectedCount <= 0}
+                          hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
+                          <Text style={styles.stepperBtnText}>−</Text>
+                        </TouchableOpacity>
+
+                        <Text style={styles.stepperCount}>{selectedCount}</Text>
+
+                        <TouchableOpacity
+                          style={[
+                            styles.stepperBtn,
+                            selectedCount >= available &&
+                              styles.stepperBtnDisabled,
+                          ]}
+                          onPress={() =>
+                            setGroupSelectionCount(g, selectedCount + 1)
+                          }
+                          disabled={selectedCount >= available}
+                          hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
+                          <Text style={styles.stepperBtnText}>+</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   </View>
-
-                  <View style={{alignItems: 'flex-end'}}>
-                    <Text
-                      style={[
-                        styles.itemPrice,
-                        it.locked && {color: '#9ca3af'},
-                      ]}>
-                      {formatMoney(Number(it.price || 0))} MXN
-                    </Text>
-                    {it.locked ? (
-                      <Text
-                        style={{
-                          fontSize: Math.round(clamp(rf(2.8), 10, 12)),
-                          color: '#ef4444',
-                          marginTop: Math.round(hp(0.3)),
-                          fontWeight: '700',
-                        }}>
-                        Pagado
-                      </Text>
-                    ) : null}
-                  </View>
-                </TouchableOpacity>
-              ))
+                );
+              })
             )}
           </View>
 
@@ -1320,12 +1727,17 @@ export default function Dividir() {
               </Text>
             </View>
           </View>
+          {anySelected && (
+            <Text style={styles.selectedTotalText}>
+              Seleccionado: {formatMoney(selectedTotal)} MXN
+            </Text>
+          )}
 
           <View style={{height: Math.round(hp(1))}} />
 
           {/* Pagar por consumo (estilo igual al botón Compartir) */}
           <LinearGradient
-            colors={['#9F4CFF', '#6A43FF', '#2C7DFF']}
+            colors={['#0b58ff', '#0b58ff', '#0b58ff']}
             start={{x: 0, y: 0}}
             end={{x: 1, y: 0}}
             style={[
@@ -1370,7 +1782,15 @@ export default function Dividir() {
             <Text style={[styles.modalTitle, {color: '#0046ff'}]}>
               {styledAlertTitle}
             </Text>
-            <Text style={[styles.modalMessage, {color: '#000'}]}>
+            <Text
+              style={[
+                styles.modalMessage,
+                {color: '#000'},
+                width > 420 && {
+                  width: modalBoxWidth - 40,
+                  alignSelf: 'center',
+                },
+              ]}>
               {styledAlertMessage}
             </Text>
 
@@ -1585,6 +2005,12 @@ function makeStyles({
       color: '#111827',
       fontSize: Math.round(clamp(rf(3.8), 12, 16)),
     },
+    availableSubtext: {
+      fontSize: Math.round(clamp(rf(3.0), 10, 13)),
+      color: '#0b58ff',
+      fontWeight: '600',
+      marginTop: 2,
+    },
 
     beforeIvaSeparator: {
       height: 1,
@@ -1682,6 +2108,7 @@ function makeStyles({
       fontSize: Math.round(clamp(rf(3.6), 12, 16)),
       textAlign: 'center',
       marginBottom: Math.round(hp(1.4)),
+      flexShrink: 1,
     },
     modalButtonsRow: {
       flexDirection: 'row',
@@ -1741,6 +2168,48 @@ function makeStyles({
       alignItems: 'center',
       justifyContent: 'center',
       backgroundColor: 'transparent',
+    },
+    // --- NUEVO: estilos del selector +/- para items agrupados por cantidad
+    stepperContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 6,
+      borderWidth: 1.2,
+      borderColor: '#0b58ff',
+      borderRadius: Math.round(wp(2)),
+      overflow: 'hidden',
+    },
+    stepperBtn: {
+      width: Math.round(clamp(rf(6.4), 26, 34)),
+      height: Math.round(clamp(rf(6.4), 26, 34)),
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: '#eef3ff',
+    },
+    stepperBtnDisabled: {
+      backgroundColor: '#f3f4f6',
+      opacity: 0.6,
+    },
+    stepperBtnText: {
+      color: '#0b58ff',
+      fontWeight: '900',
+      fontSize: Math.round(clamp(rf(4.2), 16, 20)),
+      lineHeight: Math.round(clamp(rf(4.6), 18, 22)),
+    },
+    stepperCount: {
+      minWidth: Math.round(clamp(rf(6.4), 26, 34)),
+      textAlign: 'center',
+      color: '#111827',
+      fontWeight: '800',
+      fontSize: Math.round(clamp(rf(3.6), 13, 16)),
+    },
+    selectedTotalText: {
+      fontSize: Math.round(clamp(rf(3.6), 12, 16)),
+      color: '#374151',
+      fontWeight: '700',
+      marginTop: 6,
+      textAlign: 'right',
+      alignSelf: 'flex-end',
     },
   });
 }

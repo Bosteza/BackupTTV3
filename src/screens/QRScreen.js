@@ -14,15 +14,22 @@ import {
   Easing,
   Linking,
   PixelRatio,
-  useWindowDimensions,
   Image,
+  useWindowDimensions,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+import {
+  Camera,
+  useCameraDevice,
+  useCameraPermission,
+  useCodeScanner,
+} from 'react-native-vision-camera';
+
 import {request, PERMISSIONS, RESULTS} from 'react-native-permissions';
 import {useFocusEffect, useIsFocused} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import {TOKEN, ensureToken} from '../auth/tokenManager';
 
 // 👇 this is the native view we’ll create in Xcode
@@ -38,6 +45,7 @@ const STORAGE_KEYS = {
   API_HOST: 'api_host',
   API_TOKEN: 'api_token',
 };
+const DEEP_LINK_TOKEN_KEY = 'pending_deep_link_token';
 
 const WHATSAPP_FULL_URL =
   'https://api.whatsapp.com/send?phone=525647197764&text=%C2%A1Hola!%20Quiero%20m%C3%A1s%20informaci%C3%B3n%20de%20';
@@ -72,10 +80,13 @@ const openWhatsApp = async () => {
 // -----------------------------
 const extractTokenFromRaw = raw => {
   if (!raw || typeof raw !== 'string') return null;
+
   const m1 = raw.match(/\/r\/([^\/?#]+)/i);
   if (m1 && m1[1]) return m1[1];
+
   const m2 = raw.match(/[?&]token=([^&]+)/i);
   if (m2 && m2[1]) return m2[1];
+
   try {
     const u = new URL(raw);
     const parts = u.pathname.split('/').filter(Boolean);
@@ -84,11 +95,13 @@ const extractTokenFromRaw = raw => {
     const m3 = raw.match(/([^\/?#]+)$/);
     if (m3 && m3[1]) return m3[1];
   }
+
   return null;
 };
 
 const deriveHostFromRaw = raw => {
   if (!raw || typeof raw !== 'string') return null;
+
   try {
     const u = new URL(raw);
     return `${u.protocol}//${u.host}`;
@@ -100,33 +113,33 @@ const deriveHostFromRaw = raw => {
 const resolveApiHost = async raw => {
   const hostFromQr = deriveHostFromRaw(raw);
   if (hostFromQr) return hostFromQr.replace(/\/$/, '');
+
   try {
     const stored = await AsyncStorage.getItem(STORAGE_KEYS.API_HOST);
     if (stored) return stored.replace(/\/$/, '');
-  } catch (err) {
-    // noop
-  }
+  } catch (err) {}
+
   return API_BASE_FALLBACK.replace(/\/$/, '');
 };
 
 const buildHeaders = async () => {
   await ensureToken();
+
   let token = TOKEN;
   try {
     const storedToken = await AsyncStorage.getItem(STORAGE_KEYS.API_TOKEN);
     if (storedToken) token = storedToken;
-  } catch (err) {
-    // noop
-  }
+  } catch (err) {}
 
   const headers = {'Content-Type': 'application/json'};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
 };
 
 const fetchWithTimeout = async (url, options = {}, timeout = 10000) => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
+
   try {
     const res = await fetch(url, {...options, signal: controller.signal});
     clearTimeout(id);
@@ -150,6 +163,7 @@ function AnimatedIconPulse({
 
   useEffect(() => {
     let loopAnim;
+
     if (active) {
       loopAnim = Animated.loop(
         Animated.sequence([
@@ -175,6 +189,7 @@ function AnimatedIconPulse({
         useNativeDriver: true,
       }).start();
     }
+
     return () => {
       if (loopAnim) loopAnim.stop();
     };
@@ -297,7 +312,7 @@ function AnimatedStatusModal({
           {loading ? (
             <View style={modalStyles.loaderRow}>
               <ActivityIndicator size="small" color={accent} />
-              <Text style={modalStyles.loadingText}>Consultando…</Text>
+              <Text style={modalStyles.loadingText}>Consultando...</Text>
             </View>
           ) : null}
         </Animated.View>
@@ -315,15 +330,15 @@ export default function QRScreen({navigation}) {
     return () => camLog('QRScreen unmounted');
   }, []);
 
-  const isFocused = useIsFocused();
-
   const {width, height} = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const isFocused = useIsFocused();
+  const device = useCameraDevice('back');
+  const {hasPermission, requestPermission} = useCameraPermission();
 
   const rf = p => Math.round(PixelRatio.roundToNearestPixel((p * width) / 375));
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-  const [hasPermission, setHasPermission] = useState(false);
   const [scannerActive, setScannerActive] = useState(true);
   const [flashEnabled, setFlashEnabled] = useState(false);
   const [allowScan, setAllowScan] = useState(false);
@@ -333,7 +348,10 @@ export default function QRScreen({navigation}) {
   const [statusResult, setStatusResult] = useState(null);
   const [statusToken, setStatusToken] = useState(null);
 
+  const scannerRef = useRef(null);
   const statusTimeoutRef = useRef(null);
+  const scanLockRef = useRef(false);
+  const deepLinkConsumedRef = useRef(false);
   const isHandlingScanRef = useRef(false);
   const scanningEnabled = allowScan || allowScanForStatus;
 
@@ -393,27 +411,45 @@ export default function QRScreen({navigation}) {
     })();
   }, [navigation]);
 
-  // Reset al enfocar la pantalla
+  useEffect(() => {
+    const checkPendingDeepLink = async () => {
+      // Si ya consumimos el deep link en esta instancia, no hacer nada
+      if (deepLinkConsumedRef.current) return;
+
+      try {
+        const token = await AsyncStorage.getItem(DEEP_LINK_TOKEN_KEY);
+        if (token) {
+          // Marcamos como consumido ANTES de navegar
+          deepLinkConsumedRef.current = true;
+          await AsyncStorage.removeItem(DEEP_LINK_TOKEN_KEY);
+          console.log(
+            '[QRScreen] Token pendiente encontrado, navegando a Escanear:',
+            token,
+          );
+          setTimeout(() => {
+            navigation.navigate('Escanear', {token});
+          }, 300);
+        }
+      } catch (e) {
+        console.warn('[QRScreen] Error leyendo deep link token', e);
+      }
+    };
+
+    checkPendingDeepLink();
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
-      camLog('screen focused → reset scan flags');
       setScannerActive(true);
       setAllowScan(false);
       setAllowScanForStatus(false);
-      setTimeout(() => {
-        try {
-          if (
-            scannerRef?.current &&
-            typeof scannerRef.current.reactivate === 'function'
-          ) {
-            scannerRef.current.reactivate();
-          }
-        } catch (err) {}
-      }, 300);
+      scanLockRef.current = false;
 
       return () => {
         setAllowScan(false);
         setAllowScanForStatus(false);
+        scanLockRef.current = false;
+
         if (statusTimeoutRef.current) {
           clearTimeout(statusTimeoutRef.current);
           statusTimeoutRef.current = null;
@@ -423,141 +459,37 @@ export default function QRScreen({navigation}) {
   );
 
   const reactivateScanner = (allow = false) => {
+    scanLockRef.current = false;
     setScannerActive(true);
     if (allow) setAllowScan(true);
-    setTimeout(() => {
-      try {
-        if (
-          scannerRef?.current &&
-          typeof scannerRef.current.reactivate === 'function'
-        ) {
-          scannerRef.current.reactivate();
-        }
-      } catch (err) {}
-    }, 250);
   };
 
   const startManualScan = () => reactivateScanner(true);
   const toggleFlash = () => setFlashEnabled(p => !p);
-  const onSuccess = async e => {
-    if (!allowScan && !allowScanForStatus) return;
-
-    setAllowScan(false);
-    setAllowScanForStatus(false);
-    setScannerActive(false);
-
-    const raw = e?.data ?? '';
-    const token = extractTokenFromRaw(raw);
-
-    if (!token) {
-      setStatusResult({
-        ok: false,
-        message: 'No se encontró un token válido en el QR.',
-      });
-      setStatusLoading(false);
-      setStatusModalVisible(true);
-
-      setTimeout(() => reactivateScanner(true), 900);
-      return;
-    }
-
-    if (allowScanForStatus) {
-      if (statusTimeoutRef.current) {
-        clearTimeout(statusTimeoutRef.current);
-        statusTimeoutRef.current = null;
-      }
-      handleStatusFetchForToken(raw, token);
-      return;
-    }
-
-    navigation.navigate('Escanear', {token});
-  };
-  // Handler que recibe el evento desde el componente nativo
-  const handleNativeQRRead = event => {
-    const scanningEnabled = allowScan || allowScanForStatus;
-    if (!scanningEnabled) return;
-
-    if (isHandlingScanRef.current) return;
-    isHandlingScanRef.current = true;
-
-    const data = event?.nativeEvent?.data ?? '';
-    Promise.resolve(onSuccess({data}))
-      .catch(err => console.warn('Error in onSuccess', err))
-      .finally(() => {
-        isHandlingScanRef.current = false;
-      });
-  };
 
   const showStatusModal = (resultObj, token = null, loading = false) => {
     if (statusTimeoutRef.current) {
       clearTimeout(statusTimeoutRef.current);
       statusTimeoutRef.current = null;
     }
+
     setStatusResult(resultObj);
     setStatusToken(token);
     setStatusLoading(loading);
     setStatusModalVisible(true);
   };
 
-  const hideStatusModal = () => {
-    setStatusModalVisible(false);
-    setStatusResult(null);
-    setStatusToken(null);
-    setStatusLoading(false);
-    setScannerActive(true);
-    setAllowScan(false);
-    setAllowScanForStatus(false);
-    setTimeout(() => {
-      try {
-        if (
-          scannerRef?.current &&
-          typeof scannerRef.current.reactivate === 'function'
-        ) {
-          scannerRef.current.reactivate();
-        }
-      } catch (err) {}
-    }, 300);
-  };
-
-  const onStatusPress = () => {
-    setAllowScanForStatus(true);
-    showStatusModal(
-      {ok: null, message: 'Apunta la cámara al QR para verificar la mesa...'},
-      null,
-      true,
-    );
-
-    reactivateScanner(false);
-
-    if (statusTimeoutRef.current) {
-      clearTimeout(statusTimeoutRef.current);
-      statusTimeoutRef.current = null;
-    }
-    statusTimeoutRef.current = setTimeout(() => {
-      setAllowScanForStatus(false);
-      setScannerActive(true);
-      showStatusModal(
-        {
-          ok: false,
-          message:
-            'No se detectó QR. Apunta la cámara al QR y prueba "Escanear QR".',
-        },
-        null,
-        false,
-      );
-    }, 7000);
-  };
-
   const handleStatusFetchForToken = async (raw, token) => {
     setStatusLoading(true);
     showStatusModal(
-      {ok: null, message: 'Consultando estado de la mesa…'},
+      {ok: null, message: 'Consultando estado de la mesa...'},
       token,
       true,
     );
 
     try {
       await ensureToken();
+
       const host = await resolveApiHost(raw);
       if (!host) {
         setStatusLoading(false);
@@ -577,6 +509,7 @@ export default function QRScreen({navigation}) {
       const headers = await buildHeaders();
 
       const res = await fetchWithTimeout(apiUrl, {headers}, 10000);
+
       let json = null;
       try {
         json = await res.json();
@@ -603,6 +536,7 @@ export default function QRScreen({navigation}) {
         if (json.items && Array.isArray(json.items))
           summaryParts.push(`Items: ${json.items.length}`);
       }
+
       const summary = summaryParts.length
         ? summaryParts.join(' • ')
         : 'Hay una venta activa para esta mesa.';
@@ -631,10 +565,107 @@ export default function QRScreen({navigation}) {
     }
   };
 
+  const onSuccess = async e => {
+    if (!allowScan && !allowScanForStatus) return;
+    if (scanLockRef.current) return;
+
+    scanLockRef.current = true;
+    setAllowScan(false);
+    setAllowScanForStatus(false);
+    setScannerActive(false);
+
+    const raw = e?.data ?? '';
+    const token = extractTokenFromRaw(raw);
+
+    if (!token) {
+      setStatusResult({
+        ok: false,
+        message: 'No se encontró un token válido en el QR.',
+      });
+      setStatusLoading(false);
+      setStatusModalVisible(true);
+
+      setTimeout(() => reactivateScanner(true), 900);
+      return;
+    }
+
+    if (allowScanForStatus) {
+      if (statusTimeoutRef.current) {
+        clearTimeout(statusTimeoutRef.current);
+        statusTimeoutRef.current = null;
+      }
+
+      handleStatusFetchForToken(raw, token);
+      return;
+    }
+
+    navigation.navigate('Escanear', {token});
+  };
+  // Handler que recibe el evento desde el componente nativo
+  const handleNativeQRRead = event => {
+    const scanningEnabled = allowScan || allowScanForStatus;
+    if (!scanningEnabled) return;
+
+    if (isHandlingScanRef.current) return;
+    isHandlingScanRef.current = true;
+
+    const data = event?.nativeEvent?.data ?? '';
+    Promise.resolve(onSuccess({data}))
+      .catch(err => console.warn('Error in onSuccess', err))
+      .finally(() => {
+        isHandlingScanRef.current = false;
+      });
+  };
+
+  const hideStatusModal = () => {
+    setStatusModalVisible(false);
+    setStatusResult(null);
+    setStatusToken(null);
+    setStatusLoading(false);
+    setScannerActive(true);
+    setAllowScan(false);
+    setAllowScanForStatus(false);
+    scanLockRef.current = false;
+  };
+
+  const onStatusPress = () => {
+    scanLockRef.current = false;
+    setAllowScanForStatus(true);
+
+    showStatusModal(
+      {ok: null, message: 'Apunta la cámara al QR para verificar la mesa...'},
+      null,
+      true,
+    );
+
+    reactivateScanner(false);
+
+    if (statusTimeoutRef.current) {
+      clearTimeout(statusTimeoutRef.current);
+      statusTimeoutRef.current = null;
+    }
+
+    statusTimeoutRef.current = setTimeout(() => {
+      setAllowScanForStatus(false);
+      setScannerActive(true);
+      scanLockRef.current = false;
+
+      showStatusModal(
+        {
+          ok: false,
+          message:
+            'No se detectó QR. Apunta la cámara al QR y prueba "Escanear QR".',
+        },
+        null,
+        false,
+      );
+    }, 7000);
+  };
+
   if (!hasPermission) {
     return (
       <View style={[styles.loading, {backgroundColor: '#000'}]}>
-        <Text style={styles.loadingText}>Solicitando permiso…</Text>
+        <Text style={styles.loadingText}>Solicitando permiso...</Text>
       </View>
     );
   }

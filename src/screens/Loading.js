@@ -90,9 +90,9 @@ export default function Loading() {
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar
-        barStyle="light-content"
+        barStyle="dark-content"
         translucent={false}
-        backgroundColor="transparent"
+        backgroundColor="#FFFFFF"
       />
 
       <LinearGradient
@@ -145,7 +145,10 @@ function makeStyles({
   gifMarginBottom,
 }) {
   return StyleSheet.create({
-    safe: {flex: 1, backgroundColor: '#7C3AED'},
+    safe: {
+      flex: 1,
+      backgroundColor: '#FFFFFF',
+    },
 
     gradient: {
       flex: 1,

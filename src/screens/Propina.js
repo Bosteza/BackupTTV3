@@ -1,4 +1,4 @@
-//Cambio flujo
+//Pendiente estilos
 import React, {useMemo, useState, useEffect} from 'react';
 import {
   SafeAreaView,
@@ -118,7 +118,6 @@ export default function Propina() {
         setOtherPercent(String(p || ''));
         setCustomActive(true);
       }
-    } else {
       // si no hay tipApplied en params (usuario abrió por primera vez), mantenemos estado inicial
     }
   }, [route?.params?.tipApplied, route?.params?.tip_applied]);
@@ -798,7 +797,7 @@ export default function Propina() {
                   },
                 ]}>
                 <LinearGradient
-                  colors={['#9F4CFF', '#6A43FF', '#2C7DFF']}
+                  colors={['#0b58ff', '#0b58ff', '#0b58ff']}
                   start={{x: 0, y: 0}}
                   end={{x: 1, y: 0}}
                   style={[
@@ -811,11 +810,10 @@ export default function Propina() {
                   style={[
                     styles.payPrimaryText,
                     {
-                      fontSize: btnTextSize,
-                      lineHeight: Math.round(btnTextSize * 1.32),
+                      fontSize: clampLocal(rf(14), 13, 18),
                     },
                   ]}>
-                  Pagar
+                  Continuar al pago
                 </Text>
               </View>
             </TouchableOpacity>

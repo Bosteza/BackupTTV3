@@ -1,4 +1,4 @@
-//token
+//REVISAR ESTILOS
 import React, {useEffect, useState, useCallback, useRef, useMemo} from 'react';
 import {
   SafeAreaView,
@@ -15,6 +15,7 @@ import {
   useWindowDimensions,
   Alert,
   DeviceEventEmitter,
+  TextInput,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import {
@@ -26,6 +27,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {TOKEN, ensureToken} from '../auth/tokenManager';
+
 const API_BASE_URL = 'https://api.residence.tab-track.com';
 
 const VISITS_STORAGE_KEY = 'user_visits';
@@ -194,6 +196,54 @@ const getRestauranteIdFromResolveJson = json => {
   return found !== undefined ? found : null;
 };
 
+const groupConsumptionItems = (flatItems = []) => {
+  const grouped = [];
+  const lastParentByCode = new Map();
+
+  flatItems.forEach(it => {
+    if (!it) return;
+
+    const raw = it.raw ?? {};
+    const isSubitem = !!raw.is_subitem;
+    const itemCode = String(
+      it.codigo_item ?? raw.codigo_item ?? raw.codigo ?? '',
+    ).trim();
+    const parentCode = String(raw.parent_codigo_item ?? '').trim();
+
+    if (!isSubitem) {
+      const parentEntry = {
+        ...it,
+        isSubitem: false,
+        subitems: [],
+      };
+
+      grouped.push(parentEntry);
+
+      if (itemCode) {
+        lastParentByCode.set(itemCode, parentEntry);
+      }
+    } else {
+      const subEntry = {
+        ...it,
+        isSubitem: true,
+        parent_codigo_item: parentCode || null,
+        subitems: [],
+      };
+
+      const parent = parentCode ? lastParentByCode.get(parentCode) : null;
+
+      if (parent) {
+        parent.subitems = parent.subitems || [];
+        parent.subitems.push(subEntry);
+      } else {
+        grouped.push(subEntry);
+      }
+    }
+  });
+
+  return grouped;
+};
+
 export default function CuentaResidence() {
   const navigation = useNavigation();
   const route = useRoute();
@@ -228,6 +278,9 @@ export default function CuentaResidence() {
   const [sucursalId, setSucursalId] = useState(null);
   const [restaurantImageUri, setRestaurantImageUri] = useState(null);
 
+  // --- Tips habilitados por restaurante ---
+  const [tipsEnabled, setTipsEnabled] = useState(false);
+
   const [errorModalVisible, setErrorModalVisible] = useState(false);
   const [errorModalMessage, setErrorModalMessage] = useState('');
 
@@ -241,8 +294,17 @@ export default function CuentaResidence() {
 
   const [discountAmount, setDiscountAmount] = useState(0);
   const [validationBannerVisible, setValidationBannerVisible] = useState(false);
+
   const [startConsumptionModalVisible, setStartConsumptionModalVisible] =
     useState(false);
+
+  // --- Propina (tip) state ---
+  const [tipOption, setTipOption] = useState(null);
+  const [tipAmount, setTipAmount] = useState(0);
+  const [customTipVisible, setCustomTipVisible] = useState(false);
+  const [customTipPercentText, setCustomTipPercentText] = useState('');
+  const [customTipPesosText, setCustomTipPesosText] = useState('');
+
   const isMountedRef = useRef(true);
   useEffect(() => {
     isMountedRef.current = true;
@@ -252,6 +314,7 @@ export default function CuentaResidence() {
   }, []);
 
   const suppressNoOpenSaleRef = useRef(false);
+
   const validationBannerKey = useMemo(() => {
     if (!qr) return null;
     return `residence_validation_banner_state_${String(qr).trim()}`;
@@ -333,6 +396,7 @@ export default function CuentaResidence() {
     async (edificioIdToSearch, restauranteIdToSearch) => {
       try {
         await ensureToken();
+
         const edificioId =
           edificioIdToSearch !== null && edificioIdToSearch !== undefined
             ? String(edificioIdToSearch).trim()
@@ -431,6 +495,82 @@ export default function CuentaResidence() {
           '[CuentaResidence] Error consultando imagen. Se usa imagen por defecto.',
         );
         if (isMountedRef.current) setRestaurantImageUri(null);
+      }
+    },
+    [],
+  );
+
+  // --- Consulta si el restaurante tiene habilitadas las propinas ---
+  const fetchTipsEnabled = useCallback(
+    async (edificioIdToSearch, restauranteIdToSearch) => {
+      try {
+        await ensureToken();
+
+        const edificioId =
+          edificioIdToSearch !== null && edificioIdToSearch !== undefined
+            ? String(edificioIdToSearch).trim()
+            : '';
+        const targetRestauranteId =
+          restauranteIdToSearch !== null && restauranteIdToSearch !== undefined
+            ? String(restauranteIdToSearch).trim()
+            : '';
+
+        console.log(
+          '[CuentaResidence] fetchTipsEnabled -> edificioId:',
+          edificioId,
+          'restauranteId:',
+          targetRestauranteId,
+        );
+
+        if (!edificioId || !targetRestauranteId) {
+          console.log(
+            '[CuentaResidence] Falta edificioId o restauranteId. No se consulta tips_enabled.',
+          );
+          if (isMountedRef.current) setTipsEnabled(false);
+          return;
+        }
+
+        const url = `${API_BASE_URL.replace(
+          /\/$/,
+          '',
+        )}/api/residence/edificios/${encodeURIComponent(
+          edificioId,
+        )}/restaurantes/${encodeURIComponent(targetRestauranteId)}`;
+        console.log('[CuentaResidence] Consultando tips_enabled en:', url);
+
+        const headers = {Accept: 'application/json'};
+        if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
+
+        const res = await fetch(url, {
+          method: 'GET',
+          headers,
+        });
+
+        console.log(
+          '[CuentaResidence] Status consulta restaurante (tips):',
+          res.status,
+        );
+
+        if (!res.ok) {
+          console.log(
+            '[CuentaResidence] La consulta de tips_enabled falló. Se oculta módulo de propina.',
+          );
+          if (isMountedRef.current) setTipsEnabled(false);
+          return;
+        }
+
+        const json = await res.json();
+        console.log('[CuentaResidence] Respuesta restaurante (tips):', json);
+
+        const tipsFlag =
+          json?.tips_enabled ?? json?.restaurante?.tips_enabled ?? false;
+
+        if (isMountedRef.current) {
+          setTipsEnabled(!!tipsFlag);
+        }
+      } catch (err) {
+        console.warn('fetchTipsEnabled error', err);
+        if (isMountedRef.current) setTipsEnabled(false);
       }
     },
     [],
@@ -621,6 +761,7 @@ export default function CuentaResidence() {
 
       try {
         await ensureToken();
+
         let usuarioAppId = null;
         try {
           usuarioAppId = await AsyncStorage.getItem('user_usuario_app_id');
@@ -713,6 +854,7 @@ export default function CuentaResidence() {
         });
 
         await fetchRestaurantImage(edificioId, resolvedRestaurantIdFromJson);
+        await fetchTipsEnabled(edificioId, resolvedRestaurantIdFromJson);
       } catch (err) {
         console.warn('fetchConsumo error', err);
         openErrorModal('No se pudo consultar el consumo. Revisa tu conexión.');
@@ -720,7 +862,7 @@ export default function CuentaResidence() {
         if (isMountedRef.current) setLoading(false);
       }
     },
-    [qr, applyResolveJsonToState, fetchRestaurantImage],
+    [qr, applyResolveJsonToState, fetchRestaurantImage, fetchTipsEnabled],
   );
 
   useEffect(() => {
@@ -742,15 +884,18 @@ export default function CuentaResidence() {
     setValidationBannerVisible(true);
     await persistValidationBannerState({started: true, visible: true});
   }, [persistValidationBannerState]);
+
   const handleStartConsumptionConfirmed = async () => {
     if (!qr) {
       openErrorModal('QR no disponible.');
       return;
     }
     if (accountOpening || approveLoading) return;
+
     setAccountOpening(true);
     try {
       await ensureToken();
+
       let usuarioAppId = null;
       try {
         usuarioAppId = await AsyncStorage.getItem('user_usuario_app_id');
@@ -819,6 +964,7 @@ export default function CuentaResidence() {
         edificioId,
         resolvedData?.restauranteId ?? null,
       );
+      await fetchTipsEnabled(edificioId, resolvedData?.restauranteId ?? null);
 
       const aperturaStatus = json.apertura?.status
         ? String(json.apertura.status).toUpperCase()
@@ -831,6 +977,7 @@ export default function CuentaResidence() {
           json.venta_id ??
           null;
         if (resolvedSaleId) setSaleId(String(resolvedSaleId));
+
         try {
           await fetchConsumo({showLoading: false, deferOpenAccountState: true});
         } catch (e) {
@@ -853,10 +1000,66 @@ export default function CuentaResidence() {
       setAccountOpening(false);
     }
   };
+
   const handleStartConsumption = async () => {
     if (accountOpening || approveLoading) return;
     await handleStartConsumptionConfirmed();
   };
+
+  // --- Propina (tip) helpers ---
+  const applyTipPercent = useCallback(
+    percent => {
+      const amt = +(safeNum(totalConsumo) * (percent / 100)).toFixed(2);
+      setTipOption(String(percent));
+      setTipAmount(amt);
+      setCustomTipVisible(false);
+      setCustomTipPercentText('');
+      setCustomTipPesosText('');
+    },
+    [totalConsumo],
+  );
+
+  const toggleCustomTip = useCallback(() => {
+    setTipOption('custom');
+    setCustomTipVisible(v => !v);
+  }, []);
+
+  const handleCustomTipPercentChange = useCallback(
+    text => {
+      setCustomTipPercentText(text);
+      const p = parseFloat(String(text).replace(',', '.'));
+      if (Number.isFinite(p) && p >= 0) {
+        const amt = +(safeNum(totalConsumo) * (p / 100)).toFixed(2);
+        setTipAmount(amt);
+        setCustomTipPesosText(amt.toFixed(2));
+        setTipOption('custom');
+      } else if (String(text).trim() === '') {
+        setTipAmount(0);
+      }
+    },
+    [totalConsumo],
+  );
+
+  const handleCustomTipPesosChange = useCallback(
+    text => {
+      setCustomTipPesosText(text);
+      const v = parseFloat(String(text).replace(',', '.'));
+      if (Number.isFinite(v) && v >= 0) {
+        setTipAmount(+v.toFixed(2));
+        setTipOption('custom');
+        const base = safeNum(totalConsumo);
+        const pct = base > 0 ? +((v / base) * 100).toFixed(2) : 0;
+        setCustomTipPercentText(pct ? String(pct) : '');
+      } else if (String(text).trim() === '') {
+        setTipAmount(0);
+      }
+    },
+    [totalConsumo],
+  );
+
+  const grandTotalWithTip = +(
+    safeNum(totalConsumo) + safeNum(tipAmount)
+  ).toFixed(2);
 
   const handleApproveConsumption = async () => {
     if (!qr) {
@@ -874,6 +1077,7 @@ export default function CuentaResidence() {
     setApproveLoading(true);
     try {
       await ensureToken();
+
       let usuarioAppId = null;
       try {
         usuarioAppId = await AsyncStorage.getItem('user_usuario_app_id');
@@ -900,7 +1104,11 @@ export default function CuentaResidence() {
           'Content-Type': 'application/json',
           ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
         },
-        body: JSON.stringify({qr: qr, usuario_app_id: usuarioAppId}),
+        body: JSON.stringify({
+          qr: qr,
+          usuario_app_id: usuarioAppId,
+          tip_amount: Number(tipAmount) || 0,
+        }),
       });
 
       if (!res.ok) {
@@ -928,9 +1136,11 @@ export default function CuentaResidence() {
             restaurantImage: restaurantImageUri ?? null,
             mesa: mesaId ?? null,
             fecha: json.closed_at ?? new Date().toISOString(),
-            total: Number(json.total ?? totalConsumo) || 0,
+            total: grandTotalWithTip,
             moneda: moneda ?? 'MXN',
             items: items ?? [],
+            monto_propina: Number(json.tip_amount ?? tipAmount) || 0,
+            propina: Number(json.tip_amount ?? tipAmount) || 0,
           };
           await saveVisitToStorage(visitToSave);
         }
@@ -939,7 +1149,7 @@ export default function CuentaResidence() {
       }
 
       try {
-        const amountVal = Number(json.total ?? totalConsumo) || 0;
+        const amountVal = grandTotalWithTip;
         const notifId = `notif_${Date.now()}_${Math.floor(
           Math.random() * 10000,
         )}`;
@@ -987,6 +1197,7 @@ export default function CuentaResidence() {
       } catch (e) {
         console.warn('Error creando notificación tras aprobar consumo', e);
       }
+
       try {
         await persistValidationBannerState(null);
         setValidationBannerVisible(false);
@@ -994,7 +1205,7 @@ export default function CuentaResidence() {
 
       try {
         navigation.navigate('ConfirmacionConsumo', {
-          amount: Number(json.total ?? totalConsumo) || 0,
+          amount: grandTotalWithTip,
           date: json.closed_at ?? new Date().toISOString(),
           transactionId: json.sale_id ?? saleId,
           mesa: mesaId,
@@ -1002,6 +1213,7 @@ export default function CuentaResidence() {
           sucursalId: json.sucursal_id ?? sucursalId,
           rawResponse: json,
           edificioId: json.edificio_id ?? json.edificioId ?? null,
+          tipAmount: Number(json.tip_amount ?? tipAmount) || 0,
         });
       } catch (e) {
         try {
@@ -1038,6 +1250,8 @@ export default function CuentaResidence() {
       return false;
     }
   }, [items, originalTotalConsumo, totalConsumo]);
+
+  const displayItems = useMemo(() => groupConsumptionItems(items), [items]);
 
   const layoutWidth = Math.min(width - sidePad * 2, 420);
   const headerPaddingHorizontal = Math.max(sidePad, wp(4));
@@ -1169,6 +1383,7 @@ export default function CuentaResidence() {
           </View>
         </View>
       </Modal>
+
       <Modal
         visible={startConsumptionModalVisible}
         transparent
@@ -1321,7 +1536,7 @@ export default function CuentaResidence() {
                         lineHeight: Math.round(totalNumberFont * 1.05),
                       },
                     ]}>
-                    {formatMoney(totalConsumo, moneda)}
+                    {formatMoney(grandTotalWithTip, moneda)}
                   </Text>
                   <Text
                     style={[
@@ -1370,12 +1585,12 @@ export default function CuentaResidence() {
             <View style={styles.desgloseSeparator} />
 
             <View style={styles.items}>
-              {items.length === 0 && (
+              {displayItems.length === 0 && (
                 <Text style={{color: '#666', marginVertical: 8}}>
                   No hay items registrados.
                 </Text>
               )}
-              {items.map((it, i) => (
+              {displayItems.map((it, i) => (
                 <View key={it.id ?? i} style={styles.itemBlock}>
                   <View style={styles.itemRow}>
                     <View
@@ -1395,7 +1610,7 @@ export default function CuentaResidence() {
                           {fontSize: itemNameFont},
                         ]}
                         numberOfLines={1}>
-                        {it.name}
+                        {it.isSubitem ? `• ${it.name}` : it.name}
                       </Text>
                     </View>
 
@@ -1445,6 +1660,97 @@ export default function CuentaResidence() {
                       }}>
                       Parcial: {formatMoney(it.paidAmount)} pagado
                     </Text>
+                  ) : null}
+
+                  {Array.isArray(it.subitems) && it.subitems.length > 0 ? (
+                    <View
+                      style={{
+                        marginTop: 8,
+                        marginLeft: 14,
+                        paddingLeft: 10,
+                        borderLeftWidth: 2,
+                        borderLeftColor: '#e5e7eb',
+                      }}>
+                      {it.subitems.map((sub, j) => (
+                        <View
+                          key={sub.id ?? `${i}-${j}`}
+                          style={[styles.itemBlock, {marginBottom: 8}]}>
+                          <View style={styles.itemRow}>
+                            <View
+                              style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                flex: 1,
+                              }}>
+                              <Text
+                                style={[
+                                  styles.itemName,
+                                  sub.canceled && styles.itemCanceled,
+                                  (sub.paid || sub.paidPartial) && {
+                                    color: '#10b981',
+                                    fontWeight: '800',
+                                  },
+                                  {
+                                    fontSize: Math.max(itemNameFont - 1, 11),
+                                    color: '#4b5563',
+                                  },
+                                ]}
+                                numberOfLines={1}>
+                                {`• ${sub.name}`}
+                              </Text>
+                            </View>
+
+                            <Text
+                              style={[
+                                styles.itemPrice,
+                                sub.canceled && styles.itemCanceled,
+                                (sub.paid || sub.paidPartial) && {
+                                  color: '#10b981',
+                                  fontWeight: '800',
+                                },
+                                {
+                                  width: itemPriceWidth,
+                                  fontSize: clamp(rf(2.6), 11, 15),
+                                  color: '#4b5563',
+                                },
+                              ]}>
+                              {formatMoney(sub.lineTotal)} {moneda ?? 'MXN'}
+                            </Text>
+                          </View>
+
+                          {sub.canceled ? (
+                            <Text
+                              style={[
+                                styles.canceledTag,
+                                {fontSize: clamp(rf(2.4), 10, 13)},
+                              ]}>
+                              Cancelado
+                            </Text>
+                          ) : null}
+                          {sub.paid && !sub.canceled ? (
+                            <Text
+                              style={{
+                                color: '#0b8f56',
+                                fontWeight: '800',
+                                marginTop: 6,
+                                fontSize: clamp(rf(2.4), 11, 13),
+                              }}>
+                              Pagado
+                            </Text>
+                          ) : sub.paidPartial && !sub.canceled ? (
+                            <Text
+                              style={{
+                                color: '#0b8f56',
+                                fontWeight: '700',
+                                marginTop: 6,
+                                fontSize: clamp(rf(2.4), 11, 13),
+                              }}>
+                              Parcial: {formatMoney(sub.paidAmount)} pagado
+                            </Text>
+                          ) : null}
+                        </View>
+                      ))}
+                    </View>
                   ) : null}
                 </View>
               ))}
@@ -1506,6 +1812,25 @@ export default function CuentaResidence() {
                 </View>
               )}
 
+              {tipAmount > 0 && (
+                <View style={[styles.itemRow, {paddingTop: 6}]}>
+                  <Text
+                    style={[
+                      styles.subtotalLabel,
+                      {fontSize: subtotalValueFont},
+                    ]}>
+                    Propina
+                  </Text>
+                  <Text
+                    style={[
+                      styles.subtotalValue,
+                      {fontSize: subtotalValueFont, color: '#10b981'},
+                    ]}>
+                    {formatMoney(tipAmount)} {moneda ?? 'MXN'}
+                  </Text>
+                </View>
+              )}
+
               <View style={[styles.itemRow, {paddingTop: 6}]}>
                 <Text
                   style={[styles.subtotalLabel, {fontSize: subtotalValueFont}]}>
@@ -1513,11 +1838,12 @@ export default function CuentaResidence() {
                 </Text>
                 <Text
                   style={[styles.subtotalValue, {fontSize: subtotalValueFont}]}>
-                  {formatMoney(totalConsumo)} {moneda ?? 'MXN'}
+                  {formatMoney(grandTotalWithTip)} {moneda ?? 'MXN'}
                 </Text>
               </View>
             </View>
           </View>
+
           {validationBannerVisible ? (
             <View
               style={[
@@ -1535,36 +1861,115 @@ export default function CuentaResidence() {
           ) : null}
 
           {canOpenAccount || accountOpened ? (
-            <TouchableOpacity
-              style={[
-                styles.smallPrimaryButton,
-                {
-                  width: layoutWidth,
-                  paddingVertical: Math.max(10, hp(1.2)),
-                  backgroundColor: accountOpened ? '#16a34a' : '#0046ff',
-                },
-                accountOpening || approveLoading ? {opacity: 0.75} : null,
-              ]}
-              activeOpacity={0.85}
-              onPress={
-                accountOpened
-                  ? handleApproveConsumption
-                  : handleStartConsumption
-              }
-              disabled={accountOpening || approveLoading}
-              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-              {accountOpening || approveLoading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text
-                  style={[
-                    styles.smallPrimaryButtonText,
-                    {fontSize: clamp(rf(3.2), 14, 16), textAlign: 'center'},
-                  ]}>
-                  {accountOpened ? 'Validar consumo' : 'Aprobar consumo'}
-                </Text>
-              )}
-            </TouchableOpacity>
+            <>
+              {tipsEnabled ? (
+                <View style={[styles.tipSectionBox, {width: layoutWidth}]}>
+                  <Text
+                    style={[
+                      styles.tipSectionTitle,
+                      {fontSize: clamp(rf(3.4), 14, 18)},
+                    ]}>
+                    Propina
+                  </Text>
+                  <View style={styles.tipButtonsRow}>
+                    {[10, 15, 20].map(p => (
+                      <TouchableOpacity
+                        key={p}
+                        style={[
+                          styles.tipButton,
+                          tipOption === String(p) && styles.tipButtonActive,
+                        ]}
+                        onPress={() => applyTipPercent(p)}
+                        activeOpacity={0.8}>
+                        <Text
+                          style={[
+                            styles.tipButtonText,
+                            tipOption === String(p) &&
+                              styles.tipButtonTextActive,
+                          ]}>
+                          {p}%
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity
+                      style={[
+                        styles.tipButton,
+                        tipOption === 'custom' && styles.tipButtonActive,
+                      ]}
+                      onPress={toggleCustomTip}
+                      activeOpacity={0.8}>
+                      <Text
+                        style={[
+                          styles.tipButtonText,
+                          tipOption === 'custom' && styles.tipButtonTextActive,
+                        ]}>
+                        Otro
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {customTipVisible ? (
+                    <View style={styles.customTipBox}>
+                      <View style={styles.customTipInputWrap}>
+                        <Text style={styles.customTipLabel}>%</Text>
+                        <TextInput
+                          style={styles.customTipInput}
+                          keyboardType="numeric"
+                          placeholder="0"
+                          placeholderTextColor="#9ca3af"
+                          value={customTipPercentText}
+                          onChangeText={handleCustomTipPercentChange}
+                        />
+                      </View>
+                      <View style={styles.customTipInputWrap}>
+                        <Text style={styles.customTipLabel}>
+                          {moneda ?? 'MXN'}
+                        </Text>
+                        <TextInput
+                          style={styles.customTipInput}
+                          keyboardType="numeric"
+                          placeholder="0.00"
+                          placeholderTextColor="#9ca3af"
+                          value={customTipPesosText}
+                          onChangeText={handleCustomTipPesosChange}
+                        />
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+
+              <TouchableOpacity
+                style={[
+                  styles.smallPrimaryButton,
+                  {
+                    width: layoutWidth,
+                    paddingVertical: Math.max(10, hp(1.2)),
+                    backgroundColor: accountOpened ? '#16a34a' : '#0046ff',
+                  },
+                  accountOpening || approveLoading ? {opacity: 0.75} : null,
+                ]}
+                activeOpacity={0.85}
+                onPress={
+                  accountOpened
+                    ? handleApproveConsumption
+                    : handleStartConsumption
+                }
+                disabled={accountOpening || approveLoading}
+                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+                {accountOpening || approveLoading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text
+                    style={[
+                      styles.smallPrimaryButtonText,
+                      {fontSize: clamp(rf(3.2), 14, 16), textAlign: 'center'},
+                    ]}>
+                    {accountOpened ? 'Validar consumo' : 'Aprobar consumo'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </>
           ) : (
             <View style={{height: 0}} />
           )}
@@ -1947,6 +2352,61 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: '400',
   },
+
+  //--------------------------
+  //---------------------------
+  //-------------------------
+
+  // --- Propina (tip) styles ---
+  tipSectionBox: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    marginTop: 16,
+  },
+  tipSectionTitle: {fontWeight: '800', color: '#222', marginBottom: 10},
+  tipButtonsRow: {flexDirection: 'row', justifyContent: 'space-between'},
+  tipButton: {
+    flex: 1,
+    marginHorizontal: 4,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  tipButtonActive: {backgroundColor: '#eaf1ff', borderColor: '#0046ff'},
+  tipButtonText: {color: '#444', fontWeight: '700', fontSize: 13},
+  tipButtonTextActive: {color: '#0046ff'},
+  customTipBox: {
+    flexDirection: 'row',
+    marginTop: 12,
+    justifyContent: 'space-between',
+  },
+  customTipInputWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f3f4f6',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    marginHorizontal: 4,
+    height: 40,
+  },
+  customTipLabel: {
+    color: '#666',
+    fontWeight: '700',
+    marginRight: 6,
+    fontSize: 13,
+  },
+  customTipInput: {flex: 1, color: '#111', fontSize: 14, padding: 0},
+
+  //-----------------------------
+  //--------------------------------
+
   startModalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.48)',

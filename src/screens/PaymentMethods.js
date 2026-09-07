@@ -1,94 +1,87 @@
-//Working
+//Falta test
 import React, {useState, useEffect, useMemo, useRef, useCallback} from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  Image,
   TouchableOpacity,
   SafeAreaView,
   StatusBar,
   Modal,
-  TextInput,
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  Alert,
   Dimensions,
   PixelRatio,
   Animated,
+  ActivityIndicator,
+  Switch,
+  Image,
+  TextInput,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import LinearGradient from 'react-native-linear-gradient';
+import {WebView} from 'react-native-webview';
+import {
+  StripeProvider,
+  CardField,
+  confirmSetupIntent,
+  initStripe,
+  isPlatformPaySupported,
+} from '@stripe/stripe-react-native';
+import {TOKEN, ensureToken} from '../auth/tokenManager';
 
-const STORAGE_KEY = 'saved_cards';
-const BLUE = '#0046ff';
-const SOFT_BLUE = '#dbe8ff';
-const DOT_COLOR = '#ccc';
+const API_HOST_CONST = 'https://api.tab-track.com';
 
-const initialMethods = [
-  {key: 'card1', label: 'Open Pay', icon: 'card-outline'},
-  {key: 'card2', label: 'Stripe', icon: 'card-outline'},
-  {key: 'paypal', label: 'PayPal', icon: 'logo-paypal'},
-];
+const FIXED_STRIPE_PUBLISHABLE_KEY =
+  'pk_test_51RJbpaQaBqb9H2oSU1iY1gSZnZDsZmda42KJkP4d4Ta3RVyte3lcmyzC4WsoHfYJewiuOsef4tdeaIaqBUJbqtDL00K6T8g3bt';
 
-const PlainInput = React.memo(
-  React.forwardRef(function PlainInput(props, ref) {
-    const {
-      placeholder,
-      value,
-      onChangeText,
-      keyboardType = 'default',
-      secureTextEntry = false,
-      maxLength,
-      autoCapitalize = 'sentences',
-      style,
-      returnKeyType = 'done',
-    } = props;
-    return (
-      <View style={styles.inputRow}>
-        <TextInput
-          ref={ref}
-          style={[styles.inputPlain, style]}
-          placeholder={placeholder}
-          placeholderTextColor="#9aa0a6"
-          value={value}
-          onChangeText={onChangeText}
-          keyboardType={keyboardType}
-          secureTextEntry={secureTextEntry}
-          maxLength={maxLength}
-          autoCapitalize={autoCapitalize}
-          returnKeyType={returnKeyType}
-          blurOnSubmit={false}
-          underlineColorAndroid="transparent"
-        />
-      </View>
-    );
-  }),
-);
+const PAYMENT_ENVIRONMENT = 'sandbox';
 
-/* Small styled toast component (white card) */
+const APPLE_PAY_MIN_IOS_VERSION = 10;
+
+const PAYPAL_RETURN_URL = 'http://127.0.0.1:3000/paypal/vault/approved';
+
+const COLORS = {
+  bg: '#ffffff',
+  surface: '#ffffff',
+  text: '#161616',
+  muted: '#6f6f6f',
+  faint: '#f0f3f8',
+  border: '#e8edf5',
+  accent: '#202124',
+  ink: '#111111',
+  danger: '#d92d20',
+  success: '#176b3a',
+  softBlue: '#f6f7f9',
+  blue: '#0b58ff',
+  gold: '#f3e305',
+};
+
+const AS_KEYS = {
+  USER_EMAIL: 'user_email',
+  USER_MAIL: 'user_mail',
+  USER_FULLNAME: 'user_fullname',
+  USER_NOMBRE: 'user_nombre',
+  USER_APELLIDO: 'user_apellido',
+  USER_USUARIO_APP_ID: 'user_usuario_app_id',
+  USER_PROFILE_URL: 'user_profile_url',
+};
+
 function SmallToast({message, visible, success}) {
   const anim = useRef(new Animated.Value(0)).current;
+
   useEffect(() => {
-    if (visible) {
-      Animated.timing(anim, {
-        toValue: 1,
-        duration: 220,
-        useNativeDriver: true,
-      }).start();
-    } else {
-      Animated.timing(anim, {
-        toValue: 0,
-        duration: 180,
-        useNativeDriver: true,
-      }).start();
-    }
+    Animated.timing(anim, {
+      toValue: visible ? 1 : 0,
+      duration: visible ? 220 : 180,
+      useNativeDriver: true,
+    }).start();
   }, [visible, anim]);
 
   if (!visible) return null;
+
   return (
     <Animated.View
       style={[
@@ -103,120 +96,148 @@ function SmallToast({message, visible, success}) {
               }),
             },
           ],
-          borderColor: success ? '#e6f9ee' : '#f0f0f0',
+          borderColor: success ? '#d8efe1' : COLORS.border,
         },
       ]}>
-      <Text style={[toastStyles.toastText, success && {color: '#0a6b2b'}]}>
+      <Text style={[toastStyles.toastText, success && {color: COLORS.success}]}>
         {message}
       </Text>
     </Animated.View>
   );
 }
 
-export default function PaymentMethods({navigation}) {
-  // responsive helpers using current window (better for orientation changes)
-  const {width: dimWidth, height: dimHeight} = Dimensions.get('window');
-  const wp = p => Math.round((Number(p) / 100) * dimWidth);
-  const hp = p => Math.round((Number(p) / 100) * dimHeight);
-  const rf = p => {
-    const scale = (Number(p) / 100) * dimWidth;
-    return Math.round(PixelRatio.roundToNearestPixel(scale));
-  };
+export default function PaymentMethods({navigation, route}) {
+  const params = route?.params ?? {};
+  const {width: dimWidth} = Dimensions.get('window');
+  const rf = p =>
+    Math.round(PixelRatio.roundToNearestPixel((Number(p) / 100) * dimWidth));
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-  const headerPaddingVertical = useMemo(
-    () => clamp(hp(3.5), 12, 36),
-    [dimHeight],
-  );
-  const headerPaddingHorizontal = useMemo(
-    () => clamp(wp(4), 12, 28),
-    [dimWidth],
-  );
-  const avatarSize = useMemo(
-    () => clamp(Math.round(Math.min(dimWidth * 0.08, 40)), 28, 48),
-    [dimWidth],
-  );
-  const modalWidth = useMemo(
-    () => Math.min(Math.round(dimWidth * 0.88), 520),
+  const pagePadding = useMemo(
+    () => Math.max(18, Math.round(dimWidth * 0.055)),
     [dimWidth],
   );
   const iconSize = useMemo(
-    () => clamp(Math.round(rf(2.6)), 16, 26),
+    () => clamp(Math.round(rf(2.6)), 18, 26),
     [dimWidth],
   );
+  const avatarSize = clamp(Math.round(rf(6.5)), 32, 56);
 
-  // app state
-  const [methods, setMethods] = useState(initialMethods);
+  const apiHost = params.api_host ?? API_HOST_CONST;
+  const apiToken = params.api_token ?? TOKEN ?? '';
+
+  const [screen, setScreen] = useState('wallet');
   const [username, setUsername] = useState('Usuario');
+  const [userEmail, setUserEmail] = useState(
+    params.userEmail ?? params.user_email ?? '',
+  );
+  const [userFullname, setUserFullname] = useState(
+    params.userFullname ?? params.user_fullname ?? '',
+  );
+  const [usuarioAppId, setUsuarioAppId] = useState(
+    params.usuario_app_id ?? params.user_usuario_app_id ?? '',
+  );
   const [profileUrl, setProfileUrl] = useState(null);
 
-  const [modalVisible, setModalVisible] = useState(false);
-  const [selectedMethod, setSelectedMethod] = useState(null);
-
-  // card form
-  const [cardNumber, setCardNumber] = useState('');
-  const [expiryDate, setExpiryDate] = useState('');
-  const [cvv, setCvv] = useState('');
+  const [cards, setCards] = useState([]);
+  const [loadingCards, setLoadingCards] = useState(false);
+  const [savingCard, setSavingCard] = useState(false);
+  const [stripeCardDetails, setStripeCardDetails] = useState(null);
   const [cardHolderName, setCardHolderName] = useState('');
-  const [address, setAddress] = useState('');
+  const [savePreferred, setSavePreferred] = useState(true);
+  const [stripeAccountId, setStripeAccountId] = useState(
+    params.stripe_account_id || params.stripeAccountId || null,
+  );
 
-  // saved cards local
-  const [savedCards, setSavedCards] = useState([]);
+  const [preferredSelection, setPreferredSelection] = useState({
+    type: null,
+    id: null,
+  });
+  const [settingPreferredId, setSettingPreferredId] = useState(null);
+  const [settingQuickPreferred, setSettingQuickPreferred] = useState(null);
+  const [deletingCardId, setDeletingCardId] = useState(null);
+  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
+  const [cardToDelete, setCardToDelete] = useState(null);
+  const [selectedPreferred, setSelectedPreferred] = useState(null);
 
-  // toast state
+  const [applePaySupported, setApplePaySupported] = useState(false);
+
+  // Estados del WebView modal de PayPal
+  const [paypalConnecting, setPaypalConnecting] = useState(false);
+  const [paypalModalVisible, setPaypalModalVisible] = useState(false);
+  const [paypalWebViewUrl, setPaypalWebViewUrl] = useState(null);
+  const [paypalWebViewLoading, setPaypalWebViewLoading] = useState(true);
+  const paypalSetupTokenIdRef = useRef(null);
+
   const [toastMsg, setToastMsg] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
   const [toastSuccess, setToastSuccess] = useState(false);
   const toastTimeoutRef = useRef(null);
 
-  // refs
-  const cardHolderRef = useRef(null);
-  const cardNumberRef = useRef(null);
-  const expiryRef = useRef(null);
-  const cvvRef = useRef(null);
-  const addressRef = useRef(null);
+  const [paypalMethodId, setPaypalMethodId] = useState(null);
 
-  // load profile and saved cards
-  useEffect(() => {
-    (async () => {
-      try {
-        const nombre = await AsyncStorage.getItem('user_nombre');
-        const apellido = await AsyncStorage.getItem('user_apellido');
+  const getInitials = name => {
+    if (!name) return null;
+    const parts = String(name).trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return null;
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  };
 
-        let displayName = '';
-        if (nombre && apellido)
-          displayName = `${nombre.trim()} ${apellido.trim()}`;
-        else if (nombre) displayName = nombre.trim();
-        else if (apellido) displayName = apellido.trim();
-        else displayName = 'Usuario';
+  const getAuthHeaders = useCallback(
+    (extra = {}) => {
+      const headers = {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...extra,
+      };
+      const token = TOKEN || apiToken || '';
+      if (token && String(token).trim())
+        headers.Authorization = `Bearer ${token}`;
+      return headers;
+    },
+    [apiToken],
+  );
 
-        setUsername(displayName);
+  const hostBase = useCallback(
+    () => String(apiHost || API_HOST_CONST).replace(/\/$/, ''),
+    [apiHost],
+  );
+  const buildSetupIntentUrl = useCallback(
+    () => `${hostBase()}/api/mobileapp/payment-methods/stripe/setup-intent`,
+    [hostBase],
+  );
+  const buildListPaymentMethodsUrl = useCallback(
+    userId =>
+      `${hostBase()}/api/mobileapp/payment-methods?usuario_app_id=${encodeURIComponent(
+        userId,
+      )}`,
+    [hostBase],
+  );
+  const buildDeletePaymentMethodUrl = useCallback(
+    cardId =>
+      `${hostBase()}/api/mobileapp/payment-methods/${encodeURIComponent(
+        cardId,
+      )}?gateway=stripe`,
+    [hostBase],
+  );
+  // El endpoint de "preferido" ya no recibe el id en la URL: ahora es un endpoint
+  // fijo y todo el detalle (usuario, ambiente, tipo, id del método) va en el body.
+  const buildPreferredPaymentMethodUrl = useCallback(
+    () => `${hostBase()}/api/mobileapp/payment-methods/preferred`,
+    [hostBase],
+  );
+  const buildPaypalSetupTokenUrl = useCallback(
+    () => `${hostBase()}/api/mobileapp/payment-methods/paypal/setup-token`,
+    [hostBase],
+  );
+  const buildPaypalConfirmUrl = useCallback(
+    () => `${hostBase()}/api/mobileapp/payment-methods/paypal/confirm`,
+    [hostBase],
+  );
 
-        const cachedUrl = await AsyncStorage.getItem('user_profile_url');
-        if (cachedUrl) setProfileUrl(cachedUrl);
-      } catch (e) {
-        console.warn('Error leyendo AsyncStorage', e);
-      }
-
-      // load saved cards
-      try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) setSavedCards(parsed);
-        }
-      } catch (e) {
-        console.warn('Error cargando tarjetas guardadas', e);
-      }
-    })();
-  }, []);
-
-  // helpers: toast (small white card)
-  const showToast = useCallback((message, success = false, duration = 1600) => {
-    if (toastTimeoutRef.current) {
-      clearTimeout(toastTimeoutRef.current);
-      toastTimeoutRef.current = null;
-    }
+  const showToast = useCallback((message, success = false, duration = 1700) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToastMsg(message);
     setToastSuccess(success);
     setToastVisible(true);
@@ -226,191 +247,962 @@ export default function PaymentMethods({navigation}) {
     }, duration);
   }, []);
 
-  // formatters
-  const formatCardNumber = useCallback(text => {
-    const digits = String(text).replace(/\D/g, '').slice(0, 16);
-    const groups = digits.match(/.{1,4}/g);
-    return groups ? groups.join(' ') : digits;
-  }, []);
-  const onChangeCardNumber = useCallback(
-    t => setCardNumber(formatCardNumber(t)),
-    [formatCardNumber],
-  );
+  const genIdempotencyKey = (prefix = 'pm-setup') => {
+    const suffix = Math.floor(Math.random() * 1000)
+      .toString()
+      .padStart(3, '0');
+    return `${prefix}-${suffix}`;
+  };
 
-  const formatExpiry = useCallback(text => {
-    const digits = String(text).replace(/\D/g, '').slice(0, 4);
-    if (digits.length <= 2) return digits;
-    return `${digits.slice(0, 2)}/${digits.slice(2)}`;
-  }, []);
-  const onChangeExpiry = useCallback(
-    t => setExpiryDate(formatExpiry(t)),
-    [formatExpiry],
-  );
+  const extractStripeAccountId = payload =>
+    payload?.stripe_account_id ||
+    payload?.stripeAccountId ||
+    payload?.stripe_account ||
+    payload?.stripeAccount ||
+    payload?.data?.stripe_account_id ||
+    payload?.data?.stripeAccountId ||
+    payload?.data?.stripe_account ||
+    payload?.data?.stripeAccount ||
+    null;
 
-  // save card locally
-  const persistCards = useCallback(async cards => {
+  const configureStripeForAccount = async (accountId = null) => {
+    if (
+      !FIXED_STRIPE_PUBLISHABLE_KEY ||
+      FIXED_STRIPE_PUBLISHABLE_KEY === 'pk_test_REPLACE_ME'
+    ) {
+      throw new Error('Falta configurar FIXED_STRIPE_PUBLISHABLE_KEY');
+    }
+    await initStripe({
+      publishableKey: FIXED_STRIPE_PUBLISHABLE_KEY,
+      merchantIdentifier: 'merchant.com.tabtrack.app',
+      stripeAccountId: accountId || undefined,
+    });
+  };
+
+  const normalizePaymentMethod = pm => ({
+    id: pm.id ?? pm.mobile_payment_method_id ?? pm.payment_method_id ?? null,
+    external_payment_method_id:
+      pm.external_payment_method_id ??
+      pm.external_id ??
+      pm.external_pm_id ??
+      null,
+    brand: pm.brand ?? pm.card_brand ?? pm.gateway_brand ?? '',
+    last4: pm.last4 ?? pm.card_last4 ?? '',
+    exp_month: pm.exp_month ?? pm.card_exp_month ?? null,
+    exp_year: pm.exp_year ?? pm.card_exp_year ?? null,
+    is_preferred: pm.is_preferred ?? pm.preferred ?? false,
+    status: pm.status ?? pm.state ?? '',
+    environment: pm.environment ?? PAYMENT_ENVIRONMENT,
+    type: pm.type ?? 'saved_card',
+    category:
+      pm.category ?? (pm.type && pm.type !== 'saved_card' ? 'wallet' : 'card'),
+    gateway: 'stripe',
+    raw: pm,
+  });
+
+  const resolveUsuarioAppId = useCallback(async () => {
+    if (usuarioAppId) return usuarioAppId;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const stored = await AsyncStorage.getItem(AS_KEYS.USER_USUARIO_APP_ID);
+      if (stored) {
+        setUsuarioAppId(stored);
+        return stored;
+      }
+      if (attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+    }
+    return '';
+  }, [usuarioAppId]);
+
+  const loadCards = useCallback(async () => {
+    const userId = await resolveUsuarioAppId();
+    if (!userId) {
+      showToast('No se encontró usuario_app_id', false);
+      return;
+    }
+
+    setLoadingCards(true);
     try {
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(cards));
-    } catch (e) {
-      console.warn('Error guardando tarjetas en AsyncStorage', e);
-    }
-  }, []);
+      await ensureToken();
+      const res = await fetch(buildListPaymentMethodsUrl(userId), {
+        method: 'GET',
+        headers: getAuthHeaders({
+          'Idempotency-Key': genIdempotencyKey('pm-setup'),
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      console.log(
+        '[loadCards] COMPLETE RESPONSE:😜',
+        JSON.stringify(json, null, 2),
+      );
 
-  const saveCard = useCallback(() => {
-    const rawCard = String(cardNumber).replace(/\s/g, '');
-    if (!cardHolderName.trim()) {
-      showToast('Ingresa el nombre del titular', false);
-      return;
-    }
-    if (rawCard.length < 13) {
-      showToast('Número de tarjeta inválido', false);
-      return;
-    }
-    if (!/^\d{2}\/\d{2}$/.test(expiryDate)) {
-      showToast('Fecha inválida (MM/AA)', false);
-      return;
-    }
-    if (cvv.length < 3) {
-      showToast('CVV inválido', false);
-      return;
-    }
+      if (!res.ok) {
+        console.warn('loadCards error', res.status, json);
+        showToast('No se pudieron cargar tus tarjetas', false);
+        return;
+      }
 
-    const newCard = {
-      id: `${Date.now()}`,
-      holder: cardHolderName.trim(),
-      number_masked:
-        rawCard.length >= 4
-          ? `•••• •••• •••• ${rawCard.slice(-4)}`
-          : formatCardNumber(rawCard),
-      last4: rawCard.slice(-4),
-      expiry: expiryDate,
-      address: address.trim(),
-      raw: rawCard, // local only
-    };
+      const envBucket = json?.environments?.[PAYMENT_ENVIRONMENT];
+      const arr = Array.isArray(envBucket?.payment_methods)
+        ? envBucket.payment_methods
+        : Array.isArray(json?.payment_methods)
+        ? json.payment_methods
+        : Array.isArray(json?.data)
+        ? json.data
+        : Array.isArray(json)
+        ? json
+        : [];
 
-    const updated = [newCard, ...savedCards];
-    setSavedCards(updated);
-    persistCards(updated);
+      const normalized = arr.map(normalizePaymentMethod);
+      const savedCards = normalized.filter(pm => pm.type === 'saved_card');
+      setCards(savedCards);
+      // justo después de: const savedCards = normalized.filter(...)
+      const paypalEntry = normalized.find(pm => pm.type === 'paypal');
+      if (paypalEntry) {
+        setPaypalMethodId(
+          paypalEntry.id ?? paypalEntry.external_payment_method_id ?? null,
+        );
+      }
 
-    // clear form and close modal
-    setCardNumber('');
-    setExpiryDate('');
-    setCvv('');
-    setCardHolderName('');
-    setAddress('');
-    setModalVisible(false);
-    showToast('Tarjeta guardada', true);
+      const preferredEntry = normalized.find(pm => pm.is_preferred);
+      if (preferredEntry) {
+        if (preferredEntry.type === 'saved_card') {
+          setPreferredSelection({type: 'saved_card', id: preferredEntry.id});
+        } else if (preferredEntry.type === 'apple_pay') {
+          setPreferredSelection({type: 'apple_pay', id: null});
+        } else if (preferredEntry.type === 'paypal') {
+          setPreferredSelection({type: 'paypal', id: null});
+        } else {
+          setPreferredSelection({type: null, id: null});
+        }
+      } else {
+        setPreferredSelection({type: null, id: null});
+      }
+    } catch (err) {
+      console.warn('loadCards exception', err);
+      showToast('No se pudo conectar al servidor', false);
+    } finally {
+      setLoadingCards(false);
+    }
   }, [
-    cardNumber,
-    cardHolderName,
-    expiryDate,
-    cvv,
-    address,
-    savedCards,
-    persistCards,
-    formatCardNumber,
+    buildListPaymentMethodsUrl,
+    getAuthHeaders,
+    resolveUsuarioAppId,
     showToast,
   ]);
 
-  // remove card by id (long press)
-  const removeCard = useCallback(
-    id => {
-      const filtered = savedCards.filter(c => c.id !== id);
-      setSavedCards(filtered);
-      persistCards(filtered);
-      showToast('Tarjeta eliminada', true);
-    },
-    [savedCards, persistCards, showToast],
-  );
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const nombre = await AsyncStorage.getItem(AS_KEYS.USER_NOMBRE);
+        const apellido = await AsyncStorage.getItem(AS_KEYS.USER_APELLIDO);
+        const full = await AsyncStorage.getItem(AS_KEYS.USER_FULLNAME);
+        const email =
+          (await AsyncStorage.getItem(AS_KEYS.USER_EMAIL)) ||
+          (await AsyncStorage.getItem(AS_KEYS.USER_MAIL));
+        const userId = await AsyncStorage.getItem(AS_KEYS.USER_USUARIO_APP_ID);
+        const profileImg = await AsyncStorage.getItem(AS_KEYS.USER_PROFILE_URL);
+        const displayName =
+          full || `${nombre ?? ''} ${apellido ?? ''}`.trim() || 'Usuario';
+        if (!mounted) return;
+        setUsername(displayName);
+        if (!userFullname) setUserFullname(displayName);
+        if (!userEmail && email) setUserEmail(email);
+        if (!usuarioAppId && userId) setUsuarioAppId(userId);
+        if (profileImg) setProfileUrl(profileImg);
+      } catch (e) {
+        console.warn('Error leyendo AsyncStorage', e);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
-  // open modal
-  const openAddCardModal = () => {
-    setSelectedMethod(null);
-    setModalVisible(true);
-    setCardNumber('');
-    setExpiryDate('');
-    setCvv('');
+  useEffect(() => {
+    if (!usuarioAppId) return;
+    AsyncStorage.setItem(
+      AS_KEYS.USER_USUARIO_APP_ID,
+      String(usuarioAppId),
+    ).catch(e => {
+      console.warn('No se pudo guardar usuario_app_id en AsyncStorage', e);
+    });
+  }, [usuarioAppId]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (Platform.OS !== 'ios') {
+        if (mounted) setApplePaySupported(false);
+        return;
+      }
+      try {
+        const supported = await isPlatformPaySupported({applePay: true});
+        console.log('Apple Pay supported:', supported);
+        if (mounted) setApplePaySupported(Boolean(supported));
+      } catch (e) {
+        console.warn(
+          'isPlatformPaySupported no disponible, usando fallback por versión',
+          e,
+        );
+        const majorVersion = parseInt(String(Platform.Version), 10);
+        if (mounted)
+          setApplePaySupported(
+            !Number.isNaN(majorVersion) &&
+              majorVersion >= APPLE_PAY_MIN_IOS_VERSION,
+          );
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (usuarioAppId) loadCards();
+  }, [usuarioAppId, loadCards]);
+
+  useEffect(() => {
+    const unsub = navigation.addListener?.('focus', () => {
+      if (usuarioAppId) loadCards();
+    });
+    return () => {
+      try {
+        if (typeof unsub === 'function') unsub();
+      } catch (e) {}
+    };
+  }, [navigation, usuarioAppId, loadCards]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    };
+  }, []);
+
+  const openAddCardScreen = () => {
+    setStripeCardDetails(null);
     setCardHolderName('');
-    setAddress('');
-    if (Platform.OS === 'ios') {
-      setTimeout(
-        () =>
-          cardHolderRef.current &&
-          cardHolderRef.current.focus &&
-          cardHolderRef.current.focus(),
-        220,
+    setSavePreferred(cards.length === 0);
+    setScreen('add-card');
+  };
+
+  const closeAddCardScreen = () => {
+    if (savingCard) return;
+    setStripeCardDetails(null);
+    setScreen('wallet');
+  };
+
+  const createStripeSetupIntent = async () => {
+    const userId = await resolveUsuarioAppId();
+    if (!userId) throw new Error('Falta usuario_app_id');
+
+    await ensureToken();
+    const res = await fetch(buildSetupIntentUrl(), {
+      method: 'POST',
+      headers: getAuthHeaders({
+        'Idempotency-Key': genIdempotencyKey('pm-setup'),
+      }),
+      body: JSON.stringify({
+        usuario_app_id: userId,
+        set_preferred: Boolean(savePreferred),
+        environment: PAYMENT_ENVIRONMENT,
+      }),
+    });
+    const json = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      throw new Error(
+        json?.message || json?.error || `Error del servidor (${res.status})`,
       );
+    }
+
+    const clientSecret =
+      json?.client_secret ||
+      json?.data?.client_secret ||
+      json?.setup_intent_client_secret ||
+      json?.setupIntentClientSecret ||
+      null;
+
+    if (!clientSecret) throw new Error('El servidor no devolvió client_secret');
+    return {
+      clientSecret,
+      stripeAccountId: extractStripeAccountId(json),
+      raw: json,
+    };
+  };
+
+  const saveStripeCard = async () => {
+    if (!stripeCardDetails || !stripeCardDetails.complete) {
+      showToast('Completa los datos de la tarjeta', false);
+      return;
+    }
+    if (!cardHolderName || !cardHolderName.trim()) {
+      showToast('Ingresa el nombre del titular', false);
+      return;
+    }
+
+    setSavingCard(true);
+    try {
+      const setupResp = await createStripeSetupIntent();
+      const accountIdToUse =
+        setupResp.stripeAccountId || stripeAccountId || null;
+      await configureStripeForAccount(accountIdToUse);
+      if (accountIdToUse) setStripeAccountId(accountIdToUse);
+
+      const billingDetails = {
+        email: userEmail || '',
+        name: cardHolderName || '',
+      };
+      const result = await confirmSetupIntent(setupResp.clientSecret, {
+        paymentMethodType: 'Card',
+        paymentMethodData: {billingDetails},
+      });
+
+      if (result.error) {
+        showToast(
+          result.error.message || 'No se pudo guardar la tarjeta',
+          false,
+        );
+        return;
+      }
+
+      showToast('Tarjeta agregada a tu wallet', true);
+      setScreen('wallet');
+      setStripeCardDetails(null);
+      await loadCards();
+    } catch (err) {
+      console.warn('saveStripeCard error', err);
+      showToast(err?.message || 'No se pudo guardar la tarjeta', false);
+    } finally {
+      setSavingCard(false);
     }
   };
 
-  // helpers UI: display brand-ish icon from last4 (simple)
-  const CardItem = ({card}) => (
-    <View style={styles.cardItem}>
-      <View style={{flex: 1}}>
-        <Text style={styles.cardLabel}>{card.number_masked}</Text>
-        <Text style={styles.cardMeta}>
-          {card.holder} · {card.expiry}
-        </Text>
+  // Función unificada para marcar cualquier método (tarjeta, Apple Pay o PayPal)
+  // como preferido, usando el nuevo endpoint /payment-methods/preferred.
+  // type: 'saved_card' | 'apple_pay' | 'paypal'
+  const setPreferredMethod = async ({
+    type,
+    paymentMethodId = null,
+    clientPlatform,
+  }) => {
+    const userId = await resolveUsuarioAppId();
+    if (!userId) {
+      console.warn('setPreferredMethod: no se pudo resolver usuario_app_id', {
+        type,
+        usuarioAppIdEnEstado: usuarioAppId,
+      });
+      showToast('No se encontró usuario_app_id', false);
+      return false;
+    }
+
+    const body = {
+      usuario_app_id: userId,
+      environment: PAYMENT_ENVIRONMENT,
+      type,
+      payment_method_id: paymentMethodId,
+    };
+
+    // Apple Pay no tiene payment_method_id (siempre null) pero sí necesita
+    // indicar la plataforma del cliente.
+    if (type === 'apple_pay') {
+      body.client_platform = clientPlatform || Platform.OS;
+    }
+
+    try {
+      await ensureToken();
+      const res = await fetch(buildPreferredPaymentMethodUrl(), {
+        method: 'PUT',
+        headers: getAuthHeaders({
+          'Idempotency-Key': genIdempotencyKey('pm-preferred'),
+        }),
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        console.warn('setPreferredMethod error', res.status, json);
+        showToast(
+          `No se pudo actualizar el método predeterminado (${res.status})`,
+          false,
+        );
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.warn('setPreferredMethod exception', err);
+      showToast('Error al actualizar el método predeterminado', false);
+      return false;
+    }
+  };
+
+  const togglePreferredCard = async card => {
+    const cardId =
+      card.id ??
+      card.mobile_payment_method_id ??
+      card.external_payment_method_id;
+    if (!cardId) {
+      showToast('No se encontró el id de la tarjeta', false);
+      return;
+    }
+
+    setSettingPreferredId(cardId);
+    try {
+      const ok = await setPreferredMethod({
+        type: 'saved_card',
+        paymentMethodId: cardId,
+      });
+      if (!ok) return;
+
+      setPreferredSelection({type: 'saved_card', id: cardId});
+      setCards(prev =>
+        prev.map(item => ({
+          ...item,
+          is_preferred: String(item.id) === String(cardId),
+        })),
+      );
+      setSelectedPreferred(null);
+      showToast('Tarjeta predeterminada actualizada', true);
+      await loadCards();
+    } finally {
+      setSettingPreferredId(null);
+    }
+  };
+
+  const setApplePayPreferred = async () => {
+    setSettingQuickPreferred('apple_pay');
+    try {
+      const ok = await setPreferredMethod({
+        type: 'apple_pay',
+        paymentMethodId: null,
+        clientPlatform: Platform.OS,
+      });
+      if (!ok) return;
+      setPreferredSelection({type: 'apple_pay', id: null});
+      setCards(prev => prev.map(item => ({...item, is_preferred: false})));
+      showToast('Apple Pay establecido como predeterminado', true);
+      await loadCards();
+    } finally {
+      setSettingQuickPreferred(null);
+    }
+  };
+
+  const setPaypalPreferred = async () => {
+    setSettingQuickPreferred('paypal');
+    try {
+      // TODO: sustituir null por el payment_method_id real de PayPal una vez
+      // que exista el flujo de vinculación de cuenta PayPal en la app.
+      const ok = await setPreferredMethod({
+        type: 'paypal',
+        paymentMethodId: paypalMethodId,
+      });
+      if (!ok) return;
+      setPreferredSelection({type: 'paypal', id: null});
+      setCards(prev => prev.map(item => ({...item, is_preferred: false})));
+      showToast('PayPal establecido como predeterminado', true);
+      await loadCards();
+    } finally {
+      setSettingQuickPreferred(null);
+    }
+  };
+
+  // Paso 2: Confirma el token con el backend una vez que PayPal aprobó.
+  const confirmPaypalSetup = useCallback(
+    async setupTokenId => {
+      const userId = await resolveUsuarioAppId();
+      if (!userId || !setupTokenId) {
+        setPaypalConnecting(false);
+        return;
+      }
+
+      try {
+        await ensureToken();
+        const res = await fetch(buildPaypalConfirmUrl(), {
+          method: 'POST',
+          headers: getAuthHeaders({
+            'Idempotency-Key': genIdempotencyKey('pm-setup'),
+          }),
+          body: JSON.stringify({
+            usuario_app_id: userId,
+            setup_token_id: setupTokenId,
+            set_preferred: false,
+            environment: PAYMENT_ENVIRONMENT,
+          }),
+        });
+        const json = await res.json().catch(() => null);
+
+        if (!res.ok) {
+          console.warn('confirmPaypalSetup error', res.status, json);
+          showToast('No se pudo confirmar la vinculación con PayPal', false);
+          return;
+        }
+
+        paypalSetupTokenIdRef.current = null;
+        showToast('PayPal vinculado correctamente', true);
+        await loadCards();
+      } catch (err) {
+        console.warn('confirmPaypalSetup exception', err);
+        showToast('Error al confirmar PayPal', false);
+      } finally {
+        setPaypalConnecting(false);
+      }
+    },
+    [
+      buildPaypalConfirmUrl,
+      getAuthHeaders,
+      loadCards,
+      resolveUsuarioAppId,
+      showToast,
+    ],
+  );
+
+  // Paso 1: Pide el setup_token y abre el WebView con el approval_url de PayPal.
+  const startPaypalSetup = useCallback(async () => {
+    const userId = await resolveUsuarioAppId();
+    if (!userId) {
+      showToast('No se encontró usuario_app_id', false);
+      return;
+    }
+
+    setPaypalConnecting(true);
+    try {
+      await ensureToken();
+      const res = await fetch(buildPaypalSetupTokenUrl(), {
+        method: 'POST',
+        headers: getAuthHeaders({
+          'Idempotency-Key': genIdempotencyKey('pm-setup'),
+        }),
+        body: JSON.stringify({
+          usuario_app_id: userId,
+          environment: PAYMENT_ENVIRONMENT,
+          return_url: PAYPAL_RETURN_URL,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        console.warn('startPaypalSetup error', res.status, json);
+        showToast('No se pudo iniciar la vinculación con PayPal', false);
+        setPaypalConnecting(false);
+        return;
+      }
+
+      const approvalUrl = json?.approval_url;
+      const setupTokenId = json?.setup_token_id;
+
+      if (!approvalUrl || !setupTokenId) {
+        showToast('Respuesta inválida del servidor', false);
+        setPaypalConnecting(false);
+        return;
+      }
+
+      // Guarda el token y abre el WebView modal con la URL de aprobación.
+      paypalSetupTokenIdRef.current = setupTokenId;
+      setPaypalWebViewUrl(approvalUrl);
+      setPaypalWebViewLoading(true);
+      setPaypalModalVisible(true);
+      // paypalConnecting permanece true hasta que el flujo termina o se cancela.
+    } catch (err) {
+      console.warn('startPaypalSetup exception', err);
+      showToast('Error al conectar con PayPal', false);
+      setPaypalConnecting(false);
+    }
+  }, [
+    buildPaypalSetupTokenUrl,
+    getAuthHeaders,
+    resolveUsuarioAppId,
+    showToast,
+  ]);
+
+  // Cierra el WebView modal y limpia el estado de PayPal.
+  const closePaypalModal = () => {
+    setPaypalModalVisible(false);
+    setPaypalWebViewUrl(null);
+    paypalSetupTokenIdRef.current = null;
+    setPaypalConnecting(false);
+  };
+
+  // Se dispara en cada cambio de URL dentro del WebView.
+  // Cuando detecta el return_url de PayPal, cierra el modal y confirma el token.
+  const handlePaypalWebViewNavigation = navState => {
+    const {url} = navState;
+    if (url && url.includes('paypal/vault/approved')) {
+      setPaypalModalVisible(false);
+      setPaypalWebViewUrl(null);
+      const tokenToConfirm = paypalSetupTokenIdRef.current;
+      confirmPaypalSetup(tokenToConfirm);
+    }
+  };
+
+  const deleteCard = async card => {
+    const cardId =
+      card.id ??
+      card.mobile_payment_method_id ??
+      card.external_payment_method_id;
+    if (!cardId) {
+      showToast('No se encontró el id de la tarjeta', false);
+      return;
+    }
+
+    const userId = await resolveUsuarioAppId();
+    if (!userId) {
+      showToast('No se encontró usuario_app_id', false);
+      return;
+    }
+
+    setDeletingCardId(cardId);
+    try {
+      await ensureToken();
+      const res = await fetch(buildDeletePaymentMethodUrl(cardId), {
+        method: 'DELETE',
+        headers: getAuthHeaders({
+          'Idempotency-Key': genIdempotencyKey('pm-delete'),
+        }),
+        body: JSON.stringify({usuario_app_id: userId}),
+      });
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        console.warn('deleteCard error', res.status, json);
+        showToast(`No se pudo eliminar tarjeta (${res.status})`, false);
+        return;
+      }
+
+      setCards(prev => prev.filter(item => String(item.id) !== String(cardId)));
+      setSelectedPreferred(null);
+      setPreferredSelection(prev =>
+        prev.type === 'saved_card' && String(prev.id) === String(cardId)
+          ? {type: null, id: null}
+          : prev,
+      );
+      showToast('Tarjeta eliminada', true);
+    } catch (err) {
+      console.warn('deleteCard exception', err);
+      showToast('Error al eliminar tarjeta', false);
+    } finally {
+      setDeletingCardId(null);
+      setDeleteConfirmVisible(false);
+      setCardToDelete(null);
+    }
+  };
+
+  const confirmDeleteCard = card => {
+    setCardToDelete(card);
+    setDeleteConfirmVisible(true);
+  };
+
+  const closeDeleteConfirm = () => {
+    if (deletingCardId) return;
+    setDeleteConfirmVisible(false);
+    setCardToDelete(null);
+  };
+
+  const getBrandLabel = brand => {
+    const clean = String(brand || '').trim();
+    if (!clean) return 'Tarjeta';
+    return clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
+  };
+
+  const getBrandMark = brand => {
+    const lower = String(brand || '').toLowerCase();
+    if (lower.includes('visa')) return {text: 'VISA', style: 'visa'};
+    if (lower.includes('master')) return {text: 'MC', style: 'mastercard'};
+    if (lower.includes('amex') || lower.includes('american'))
+      return {text: 'AMEX', style: 'amex'};
+    return {text: 'CARD', style: 'generic'};
+  };
+
+  // Modal con WebView que carga la página de login de PayPal.
+  // Se cierra automáticamente al detectar el return_url.
+  const renderPaypalWebViewModal = () => (
+    <Modal
+      visible={paypalModalVisible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={closePaypalModal}>
+      <SafeAreaView style={styles.paypalModal}>
+        {/* Header del modal */}
+        <View style={styles.paypalModalHeader}>
+          <TouchableOpacity
+            onPress={closePaypalModal}
+            style={styles.headerIconButton}>
+            <Ionicons name="close" size={24} color={COLORS.text} />
+          </TouchableOpacity>
+          <Text style={styles.paypalModalTitle}>Vincular PayPal</Text>
+          <View style={styles.headerIconButton} />
+        </View>
+
+        {/* Indicador de carga encima del WebView */}
+        {paypalWebViewLoading ? (
+          <View style={styles.paypalWebViewLoader}>
+            <ActivityIndicator size="large" color={COLORS.blue} />
+            <Text style={styles.paypalWebViewLoaderText}>
+              Cargando PayPal...
+            </Text>
+          </View>
+        ) : null}
+
+        {/* WebView con la página de autorización de PayPal */}
+        {paypalWebViewUrl ? (
+          <WebView
+            source={{uri: paypalWebViewUrl}}
+            style={styles.paypalWebView}
+            onNavigationStateChange={handlePaypalWebViewNavigation}
+            onLoadStart={() => setPaypalWebViewLoading(true)}
+            onLoadEnd={() => setPaypalWebViewLoading(false)}
+            javaScriptEnabled
+            domStorageEnabled
+            startInLoadingState={false}
+          />
+        ) : null}
+      </SafeAreaView>
+    </Modal>
+  );
+
+  const renderExternalWallets = () => (
+    <View style={styles.walletBlock}>
+      <Text style={styles.blockTitle}>Métodos de pago rápido</Text>
+
+      {applePaySupported ? (
+        <View style={styles.walletOption}>
+          {/* Apple Pay ya está configurado del lado del servidor, así que
+              tocar el recuadro completo también lo marca como preferido
+              (antes solo mostraba "Próximamente disponible", lo cual ya
+              no aplica para este método). */}
+          <TouchableOpacity
+            style={styles.walletOptionMain}
+            activeOpacity={0.88}
+            onPress={setApplePayPreferred}
+            disabled={settingQuickPreferred === 'apple_pay'}>
+            <View style={styles.walletLogo}>
+              <Ionicons name="logo-apple" size={24} color={COLORS.text} />
+            </View>
+            <View style={{flex: 1}}>
+              <Text style={styles.walletOptionTitle}>Apple Pay</Text>
+              {preferredSelection.type === 'apple_pay' ? (
+                <View style={styles.preferredChip}>
+                  <Ionicons
+                    name="star"
+                    size={11}
+                    color={COLORS.blue}
+                    style={{marginRight: 3}}
+                  />
+                  <Text style={styles.preferredChipText}>Predeterminado</Text>
+                </View>
+              ) : null}
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.cardIconButton}
+            onPress={setApplePayPreferred}
+            disabled={settingQuickPreferred === 'apple_pay'}>
+            {settingQuickPreferred === 'apple_pay' ? (
+              <ActivityIndicator size="small" />
+            ) : (
+              <Ionicons
+                name={
+                  preferredSelection.type === 'apple_pay'
+                    ? 'star'
+                    : 'star-outline'
+                }
+                size={19}
+                color={
+                  preferredSelection.type === 'apple_pay'
+                    ? COLORS.gold
+                    : COLORS.muted
+                }
+              />
+            )}
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {/* PayPal aún no está terminado del lado del servidor, así que se
+          mantiene el aviso de "Próximamente disponible" al tocar el
+          recuadro. La estrella sigue permitiendo marcarlo como preferido. */}
+      <View style={styles.walletOption}>
+        <TouchableOpacity
+          style={styles.walletOptionMain}
+          activeOpacity={0.88}
+          onPress={startPaypalSetup}
+          disabled={paypalConnecting}>
+          <View style={styles.walletLogo}>
+            <Ionicons name="logo-paypal" size={23} color="#003087" />
+          </View>
+          <View style={{flex: 1}}>
+            <Text style={styles.walletOptionTitle}>PayPal</Text>
+            {paypalConnecting && !paypalModalVisible ? (
+              <View style={styles.preferredChip}>
+                <ActivityIndicator
+                  size="small"
+                  color={COLORS.blue}
+                  style={{marginRight: 4}}
+                />
+                <Text style={styles.preferredChipText}>Conectando...</Text>
+              </View>
+            ) : preferredSelection.type === 'paypal' ? (
+              <View style={styles.preferredChip}>
+                <Ionicons
+                  name="star"
+                  size={11}
+                  color={COLORS.blue}
+                  style={{marginRight: 3}}
+                />
+                <Text style={styles.preferredChipText}>Predeterminado</Text>
+              </View>
+            ) : null}
+          </View>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.cardIconButton}
+          onPress={setPaypalPreferred}
+          disabled={settingQuickPreferred === 'paypal'}>
+          {settingQuickPreferred === 'paypal' ? (
+            <ActivityIndicator size="small" />
+          ) : (
+            <Ionicons
+              name={
+                preferredSelection.type === 'paypal' ? 'star' : 'star-outline'
+              }
+              size={19}
+              color={
+                preferredSelection.type === 'paypal'
+                  ? COLORS.gold
+                  : COLORS.muted
+              }
+            />
+          )}
+        </TouchableOpacity>
       </View>
-      <TouchableOpacity
-        onPress={() => {
-          showToast('Tarjeta seleccionada', true);
-        }}
-        onLongPress={() => {
-          Alert.alert('Eliminar tarjeta', '¿Deseas eliminar esta tarjeta?', [
-            {text: 'Cancelar', style: 'cancel'},
-            {
-              text: 'Eliminar',
-              style: 'destructive',
-              onPress: () => removeCard(card.id),
-            },
-          ]);
-        }}
-        style={styles.cardAction}>
-        <Text style={{color: BLUE, fontWeight: '700'}}>Usar</Text>
-      </TouchableOpacity>
     </View>
   );
 
-  return (
+  const renderCardItem = card => {
+    const cardId = card.id ?? card.external_payment_method_id;
+    const brand = getBrandLabel(card.brand);
+    const mark = getBrandMark(card.brand);
+    const last4 = card.last4 || '----';
+    const exp =
+      card.exp_month && card.exp_year
+        ? `${card.exp_month}/${String(card.exp_year).slice(-2)}`
+        : '--/--';
+    const isPreferred =
+      preferredSelection.type === 'saved_card' &&
+      String(preferredSelection.id) === String(cardId);
+    const isSelected =
+      String(
+        selectedPreferred?.id ??
+          selectedPreferred?.external_payment_method_id ??
+          '',
+      ) === String(cardId);
+    const deleting = String(deletingCardId) === String(cardId);
+    const settingPreferred = String(settingPreferredId) === String(cardId);
+
+    return (
+      <TouchableOpacity
+        key={`card-${cardId}`}
+        style={[styles.cardRow, isSelected && styles.cardRowSelected]}
+        activeOpacity={0.86}
+        onPress={() => setSelectedPreferred(card)}>
+        <View
+          style={[styles.cardBrandMark, styles[`cardBrandMark_${mark.style}`]]}>
+          {mark.style === 'mastercard' ? (
+            <View style={styles.mastercardLogo}>
+              <View
+                style={[styles.mastercardCircle, styles.mastercardCircleLeft]}
+              />
+              <View
+                style={[styles.mastercardCircle, styles.mastercardCircleRight]}
+              />
+            </View>
+          ) : (
+            <Text
+              style={[
+                styles.cardBrandText,
+                mark.style === 'visa' && styles.cardBrandTextVisa,
+              ]}>
+              {mark.text}
+            </Text>
+          )}
+        </View>
+
+        <View style={{flex: 1}}>
+          <View style={styles.cardTopLine}>
+            <Text style={styles.cardTitle}>•••• {last4}</Text>
+            {isPreferred ? (
+              <View style={styles.preferredChip}>
+                <Ionicons
+                  name="star"
+                  size={11}
+                  color={COLORS.blue}
+                  style={{marginRight: 3}}
+                />
+                <Text style={styles.preferredChipText}>Predeterminado</Text>
+              </View>
+            ) : null}
+          </View>
+          <Text style={styles.cardSub}>
+            {brand} · Expira {exp}
+          </Text>
+        </View>
+
+        <View style={styles.cardActions}>
+          <TouchableOpacity
+            style={styles.cardIconButton}
+            onPress={() => togglePreferredCard(card)}
+            disabled={settingPreferred}>
+            {settingPreferred ? (
+              <ActivityIndicator size="small" />
+            ) : (
+              <Ionicons
+                name={isPreferred ? 'star' : 'star-outline'}
+                size={19}
+                color={isPreferred ? COLORS.gold : COLORS.muted}
+              />
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.cardIconButton}
+            onPress={() => confirmDeleteCard(card)}
+            disabled={deleting}>
+            {deleting ? (
+              <ActivityIndicator size="small" />
+            ) : (
+              <Ionicons name="trash-outline" size={19} color={COLORS.danger} />
+            )}
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderWalletScreen = () => (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" />
-      <View
-        style={[
-          styles.header,
-          {
-            paddingVertical: headerPaddingVertical,
-            paddingHorizontal: headerPaddingHorizontal,
-          },
-        ]}>
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+      <View style={[styles.header, {paddingHorizontal: pagePadding}]}>
         <TouchableOpacity
           onPress={() => navigation.goBack()}
-          style={styles.backButton}
+          style={styles.headerIconButton}
           accessibilityLabel="Volver">
           <Ionicons
             name="arrow-back"
-            size={Math.round(clamp(iconSize, 20, 28))}
-            color={BLUE}
+            size={Math.round(clamp(iconSize, 23, 28))}
+            color={COLORS.blue}
           />
         </TouchableOpacity>
-        <Text
-          style={[
-            styles.headerTitle,
-            {fontSize: clamp(Math.round(rf(2.6)), 20, 24)},
-          ]}>
-          Perfil
-        </Text>
-
+        <Text style={styles.headerTitle}>Métodos de pago</Text>
         <View style={styles.headerRight}>
           <View
-            style={{
-              width: avatarSize,
-              height: avatarSize,
-              borderRadius: Math.round(avatarSize / 2),
-              overflow: 'hidden',
-              backgroundColor: '#f3f6ff',
-              marginHorizontal: 8,
-            }}>
+            style={[
+              styles.avatarWrap,
+              {
+                width: avatarSize,
+                height: avatarSize,
+                borderRadius: Math.round(avatarSize / 2),
+              },
+            ]}>
             {profileUrl ? (
               <Image
                 source={{uri: profileUrl}}
@@ -418,13 +1210,7 @@ export default function PaymentMethods({navigation}) {
                 resizeMode="cover"
               />
             ) : (
-              <View
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}>
+              <View style={styles.avatarInitialsWrap}>
                 <Text
                   style={[
                     styles.avatarInitials,
@@ -435,16 +1221,7 @@ export default function PaymentMethods({navigation}) {
               </View>
             )}
           </View>
-
-          <Text
-            style={[
-              styles.username,
-              {
-                fontSize: clamp(Math.round(rf(1.8)), 14, 18),
-                marginRight: Math.round(Math.max(8, dimWidth * 0.02)),
-              },
-            ]}
-            numberOfLines={1}>
+          <Text style={styles.headerUsername} numberOfLines={1}>
             {username}
           </Text>
         </View>
@@ -453,284 +1230,65 @@ export default function PaymentMethods({navigation}) {
       <ScrollView
         contentContainerStyle={[
           styles.scrollContent,
-          {paddingHorizontal: Math.max(16, Math.round(dimWidth * 0.06))},
+          {paddingHorizontal: pagePadding},
         ]}
         keyboardShouldPersistTaps="always">
-        <View
-          style={[
-            styles.sectionHeader,
-            {justifyContent: 'space-between', alignItems: 'center'},
-          ]}>
-          <View style={{flexDirection: 'row', alignItems: 'center'}}>
-            <Ionicons name="card-outline" size={20} color={BLUE} />
-            <Text
-              style={[
-                styles.sectionTitle,
-                {fontSize: clamp(Math.round(rf(1.9)), 14, 18), marginLeft: 8},
-              ]}>
-              Métodos de Pago
-            </Text>
+        {renderExternalWallets()}
+
+        <View style={styles.cardsBlock}>
+          <View style={styles.blockHeader}>
+            <Text style={styles.blockTitle}>Tarjetas</Text>
+            <TouchableOpacity
+              style={styles.addCardButton}
+              onPress={openAddCardScreen}
+              activeOpacity={0.9}>
+              <Ionicons
+                name="add"
+                size={19}
+                color={COLORS.blue}
+                style={{marginRight: 5}}
+              />
+              <Text style={styles.addCardButtonText}>Agregar</Text>
+            </TouchableOpacity>
           </View>
 
-          <TouchableOpacity
-            onPress={openAddCardModal}
-            style={styles.addButton}
-            activeOpacity={0.9}
-            accessibilityRole="button"
-            accessibilityLabel="Agregar tarjeta">
-            <Ionicons
-              name="add"
-              size={18}
-              color={BLUE}
-              style={{marginRight: 6}}
-            />
-            <Text style={{color: BLUE, fontWeight: '700'}}>
-              Agregar tarjeta
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={{marginTop: 18}}>
-          {savedCards.length === 0 ? (
-            <View style={styles.emptyBox}>
-              <Text style={{color: '#333', marginBottom: 8}}>
-                Aún no tienes tarjetas guardadas.
+          {loadingCards ? (
+            <View style={styles.emptyState}>
+              <ActivityIndicator color={COLORS.text} />
+              <Text style={styles.emptyText}>Cargando tarjetas...</Text>
+            </View>
+          ) : cards.length === 0 ? (
+            <View style={styles.emptyState}>
+              <View style={styles.emptyIcon}>
+                <Ionicons name="card-outline" size={27} color={COLORS.text} />
+              </View>
+              <Text style={styles.emptyTitle}>Aún no hay tarjetas</Text>
+              <Text style={styles.emptyText}>
+                Agrega una tarjeta para pagar más rápido en tus próximas
+                visitas.
               </Text>
+              <TouchableOpacity
+                style={styles.emptyButton}
+                onPress={openAddCardScreen}>
+                <Text style={styles.emptyButtonText}>Agregar tarjeta</Text>
+              </TouchableOpacity>
             </View>
           ) : (
-            <View style={styles.cardsList}>
-              {savedCards.map(card => (
-                <CardItem key={card.id} card={card} />
-              ))}
-            </View>
+            <View style={styles.cardsList}>{cards.map(renderCardItem)}</View>
           )}
         </View>
-
-        <TouchableOpacity
-          style={[
-            styles.saveButton,
-            {alignSelf: dimWidth > 420 ? 'flex-end' : 'flex-start'},
-          ]}
-          onPress={() =>
-            Alert.alert('Guardar', 'Función no implementada aún.')
-          }>
-          <Text
-            style={[
-              styles.saveButtonText,
-              {fontSize: clamp(Math.round(rf(1.6)), 13, 16)},
-            ]}>
-            Guardar
-          </Text>
-        </TouchableOpacity>
       </ScrollView>
+      {/* Modal WebView de PayPal */}
+      {renderPaypalWebViewModal()}
 
-      {/* Modal para agregar tarjeta (fade) */}
-      <Modal
-        animationType="fade"
-        transparent
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
-        presentationStyle="overFullScreen">
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
-          style={styles.modalKeyboardAvoider}>
-          <View style={styles.modalOverlay}>
-            <Pressable
-              style={styles.modalBackdrop}
-              onPress={() => setModalVisible(false)}
-            />
+      <DeleteConfirmModal
+        visible={deleteConfirmVisible}
+        card={cardToDelete}
+        deleting={Boolean(deletingCardId)}
+        onClose={closeDeleteConfirm}
+        onConfirm={() => cardToDelete && deleteCard(cardToDelete)}
+      />
 
-            <View style={[styles.modalContainer, {width: modalWidth}]}>
-              <LinearGradient
-                colors={['#ffffff', '#fbfbff']}
-                style={styles.modalGradient}>
-                <TouchableOpacity
-                  style={styles.modalClose}
-                  onPress={() => setModalVisible(false)}
-                  accessibilityLabel="Cerrar">
-                  <Ionicons name="close" size={18} color="#6b7280" />
-                </TouchableOpacity>
-
-                <Text
-                  style={[
-                    styles.modalTitle,
-                    {fontSize: clamp(Math.round(rf(2.1)), 16, 20)},
-                  ]}>
-                  Agregar tarjeta
-                </Text>
-
-                <View
-                  style={{
-                    width: '100%',
-                    borderRadius: 12,
-                    padding: 14,
-                    marginVertical: 8,
-                    backgroundColor: '#fff',
-                    borderWidth: 1.6,
-                    borderColor: SOFT_BLUE,
-                    shadowColor: '#000',
-                    shadowOpacity: 0.06,
-                    shadowOffset: {width: 0, height: 6},
-                    shadowRadius: 10,
-                    elevation: 4,
-                  }}>
-                  <View
-                    style={{
-                      flexDirection: 'row',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                    }}>
-                    <View style={{flex: 1, paddingRight: 10}}>
-                      <Text
-                        style={{
-                          color: '#222',
-                          fontWeight: '700',
-                          fontSize: 13,
-                        }}>
-                        Tarjeta
-                      </Text>
-
-                      <Text
-                        style={styles.cardNumber}
-                        numberOfLines={1}
-                        adjustsFontSizeToFit
-                        minimumFontScale={0.68}>
-                        {cardNumber ? cardNumber : '•••• •••• •••• ••••'}
-                      </Text>
-
-                      <View
-                        style={{
-                          flexDirection: 'row',
-                          marginTop: 10,
-                          alignItems: 'center',
-                        }}>
-                        <Text style={{color: '#666', marginRight: 12}}>
-                          Titular
-                        </Text>
-                        <View style={{flex: 1}}>
-                          <Text
-                            style={styles.cardHolder}
-                            numberOfLines={1}
-                            adjustsFontSizeToFit
-                            minimumFontScale={0.68}>
-                            {cardHolderName
-                              ? cardHolderName
-                              : 'NOMBRE APELLIDO'}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-
-                    <View style={{width: 110, alignItems: 'flex-end'}}>
-                      <View
-                        style={{
-                          backgroundColor: '#f0f6ff',
-                          paddingHorizontal: 10,
-                          paddingVertical: 6,
-                          borderRadius: 8,
-                          borderWidth: 1,
-                          borderColor: '#e6eefc',
-                        }}>
-                        <Text
-                          style={styles.expiryText}
-                          numberOfLines={1}
-                          adjustsFontSizeToFit
-                          minimumFontScale={0.68}>
-                          {expiryDate ? expiryDate : 'MM/AA'}
-                        </Text>
-                      </View>
-                      <Image
-                        source={require('../../assets/images/logo.png')}
-                        style={{width: 64, height: 18, marginTop: 16}}
-                        resizeMode="contain"
-                      />
-                    </View>
-                  </View>
-                </View>
-
-                {/* Inputs planos */}
-                <PlainInput
-                  ref={cardHolderRef}
-                  placeholder="Nombre del titular"
-                  value={cardHolderName}
-                  onChangeText={setCardHolderName}
-                  autoCapitalize="words"
-                />
-
-                <PlainInput
-                  ref={cardNumberRef}
-                  placeholder="Número de tarjeta"
-                  value={cardNumber}
-                  onChangeText={onChangeCardNumber}
-                  keyboardType="number-pad"
-                  maxLength={19}
-                  autoCapitalize="none"
-                />
-
-                <View style={styles.row}>
-                  <View style={{width: '58%'}}>
-                    <PlainInput
-                      ref={expiryRef}
-                      placeholder="MM/AA"
-                      value={expiryDate}
-                      onChangeText={onChangeExpiry}
-                      keyboardType="number-pad"
-                      maxLength={5}
-                      autoCapitalize="none"
-                    />
-                  </View>
-
-                  <View style={{width: '38%'}}>
-                    <PlainInput
-                      ref={cvvRef}
-                      placeholder="CVV"
-                      value={cvv}
-                      onChangeText={t =>
-                        setCvv(String(t).replace(/\D/g, '').slice(0, 4))
-                      }
-                      keyboardType="number-pad"
-                      secureTextEntry={true}
-                      maxLength={4}
-                      autoCapitalize="none"
-                    />
-                  </View>
-                </View>
-
-                <PlainInput
-                  ref={addressRef}
-                  placeholder="Dirección (opcional)"
-                  value={address}
-                  onChangeText={setAddress}
-                  autoCapitalize="words"
-                />
-
-                <View style={styles.modalButtons}>
-                  <TouchableOpacity
-                    style={styles.cancelButton}
-                    onPress={() => setModalVisible(false)}>
-                    <Text style={styles.cancelButtonText}>Cancelar</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.saveButtonModal}
-                    onPress={saveCard}>
-                    <Text style={styles.saveButtonText}>Guardar</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* small toast inside modal */}
-                <SmallToast
-                  message={toastMsg}
-                  visible={toastVisible}
-                  success={toastSuccess}
-                />
-              </LinearGradient>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      {/* small toast at screen level too (for deletes/others) */}
       <View style={toastStyles.container} pointerEvents="box-none">
         <SmallToast
           message={toastMsg}
@@ -740,234 +1298,825 @@ export default function PaymentMethods({navigation}) {
       </View>
     </SafeAreaView>
   );
+
+  const renderAddCardScreen = () => (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+      <View style={[styles.header, {paddingHorizontal: pagePadding}]}>
+        <TouchableOpacity
+          onPress={closeAddCardScreen}
+          style={styles.headerIconButton}
+          accessibilityLabel="Volver">
+          <Ionicons
+            name="chevron-back"
+            size={Math.round(clamp(iconSize, 20, 28))}
+            color={COLORS.text}
+          />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Agregar tarjeta</Text>
+        <View style={styles.headerIconButton} />
+      </View>
+
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+        style={{flex: 1}}>
+        <ScrollView
+          contentContainerStyle={[
+            styles.addContent,
+            {paddingHorizontal: pagePadding},
+          ]}
+          keyboardShouldPersistTaps="always">
+          <View style={styles.cardPreview}>
+            <View style={styles.cardPreviewTop}>
+              <Text style={styles.cardPreviewBrand}>
+                {getBrandLabel(stripeCardDetails?.brand)}
+              </Text>
+              <View style={styles.cardPreviewChip} />
+            </View>
+            <Text style={styles.cardPreviewNumber}>
+              {stripeCardDetails?.last4
+                ? `••••  ••••  ••••  ${stripeCardDetails.last4}`
+                : '••••  ••••  ••••  ••••'}
+            </Text>
+            <View style={styles.cardPreviewBottom}>
+              <View>
+                <Text style={styles.cardPreviewLabel}>Titular</Text>
+                <Text style={styles.cardPreviewValue}>
+                  {cardHolderName || 'Nombre del titular'}
+                </Text>
+              </View>
+              <View>
+                <Text style={styles.cardPreviewLabel}>Expira</Text>
+                <Text style={styles.cardPreviewValue}>
+                  {stripeCardDetails?.expiryMonth &&
+                  stripeCardDetails?.expiryYear
+                    ? `${String(stripeCardDetails.expiryMonth).padStart(
+                        2,
+                        '0',
+                      )}/${String(stripeCardDetails.expiryYear).slice(-2)}`
+                    : 'MM/AA'}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.formBlock}>
+            <Text style={styles.formTitle}>Datos de la tarjeta</Text>
+
+            <View style={styles.inputWrap}>
+              <Ionicons
+                name="person-outline"
+                size={18}
+                color={COLORS.muted}
+                style={{marginRight: 8}}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Nombre del titular"
+                value={cardHolderName}
+                onChangeText={setCardHolderName}
+                placeholderTextColor="#9a9a9a"
+                autoCapitalize="words"
+              />
+            </View>
+
+            <View style={styles.stripeFieldWrap}>
+              <CardField
+                postalCodeEnabled={false}
+                placeholders={{number: '4242 4242 4242 4242'}}
+                cardStyle={{
+                  borderRadius: 8,
+                  backgroundColor: COLORS.surface,
+                  textColor: COLORS.text,
+                  placeholderColor: '#9a9a9a',
+                }}
+                style={{width: '100%', height: 52}}
+                onCardChange={setStripeCardDetails}
+              />
+            </View>
+
+            <View style={styles.preferenceRow}>
+              <View style={{flex: 1}}>
+                <Text style={styles.preferenceTitle}>
+                  Usar como método de pago predeterminado
+                </Text>
+                <Text style={styles.preferenceSub}>
+                  Esta tarjeta se seleccionará por defecto en pagos futuros.
+                </Text>
+              </View>
+              <Switch
+                value={savePreferred}
+                onValueChange={setSavePreferred}
+                trackColor={{false: '#d8d4ce', true: '#0b58ff'}}
+                thumbColor="#ffffff"
+              />
+            </View>
+          </View>
+        </ScrollView>
+
+        <View style={[styles.addFooter, {paddingHorizontal: pagePadding}]}>
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={closeAddCardScreen}
+            disabled={savingCard}>
+            <Text style={styles.secondaryButtonText}>Cancelar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={saveStripeCard}
+            disabled={savingCard}>
+            {savingCard ? (
+              <ActivityIndicator color="#fefefe" />
+            ) : (
+              <Text style={styles.primaryButtonText}>Guardar tarjeta</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+
+      <View style={toastStyles.container} pointerEvents="box-none">
+        <SmallToast
+          message={toastMsg}
+          visible={toastVisible}
+          success={toastSuccess}
+        />
+      </View>
+    </SafeAreaView>
+  );
+
+  return (
+    <StripeProvider
+      publishableKey={FIXED_STRIPE_PUBLISHABLE_KEY}
+      merchantIdentifier="merchant.com.tabtrack.app"
+      stripeAccountId={stripeAccountId || undefined}>
+      {screen === 'add-card' ? renderAddCardScreen() : renderWalletScreen()}
+    </StripeProvider>
+  );
 }
 
-/* helper initials */
-function getInitials(name) {
-  if (!name) return '👤';
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '👤';
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[1][0]).toUpperCase();
+function DeleteConfirmModal({visible, card, deleting, onClose, onConfirm}) {
+  const brand = String(card?.brand || 'Tarjeta').toUpperCase();
+  const last4 = card?.last4 || '----';
+
+  return (
+    <Modal
+      animationType="fade"
+      transparent
+      visible={visible}
+      onRequestClose={onClose}
+      presentationStyle="overFullScreen">
+      <View style={styles.deleteOverlay}>
+        <Pressable style={styles.deleteBackdrop} onPress={onClose} />
+        <View style={styles.deleteModalBox}>
+          <View style={styles.deleteIconCircle}>
+            <Ionicons name="trash-outline" size={24} color={COLORS.danger} />
+          </View>
+          <Text style={styles.deleteTitle}>Eliminar tarjeta</Text>
+          <Text style={styles.deleteMessage}>
+            Esta tarjeta se quitará de tus métodos de pago guardados.
+          </Text>
+
+          <View style={styles.deleteCardPreview}>
+            <Ionicons
+              name="card-outline"
+              size={19}
+              color={COLORS.text}
+              style={{marginRight: 8}}
+            />
+            <View style={{flex: 1}}>
+              <Text style={styles.deleteCardTitle}>
+                {brand} •••• {last4}
+              </Text>
+              <Text style={styles.deleteCardSub}>
+                Esta acción no se puede deshacer.
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.deleteButtons}>
+            <TouchableOpacity
+              style={styles.deleteCancelButton}
+              onPress={onClose}
+              disabled={deleting}>
+              <Text style={styles.deleteCancelText}>Cancelar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.deleteConfirmButton}
+              onPress={onConfirm}
+              disabled={deleting}>
+              {deleting ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.deleteConfirmText}>Eliminar</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
 }
 
-/* styles */
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: COLORS.bg,
     paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0,
   },
   header: {
+    height: 80,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: COLORS.bg,
     borderBottomWidth: 1,
-    borderBottomColor: BLUE,
+    borderBottomColor: COLORS.blue,
   },
-  headerTitle: {fontSize: 22, fontWeight: '600', color: BLUE},
-  headerRight: {flexDirection: 'row', alignItems: 'center', marginLeft: 'auto'},
-  avatarInitials: {color: '#0046ff', fontWeight: '700'},
-  username: {fontSize: 16, color: '#000', marginRight: 16, maxWidth: 160},
-  backButton: {marginRight: 12},
-  scrollContent: {paddingTop: 16, paddingBottom: 32},
-  sectionHeader: {flexDirection: 'row', alignItems: 'center', marginBottom: 12},
-  sectionTitle: {fontSize: 16, fontWeight: '600', color: BLUE, marginLeft: 8},
-  addButton: {
+  headerIconButton: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitle: {
+    color: COLORS.blue,
+    fontSize: 18,
+    fontWeight: '800',
+    flex: 1,
+    textAlign: 'center',
+  },
+  headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e6eefc',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    shadowColor: '#0046ff',
-    shadowOpacity: 0.06,
-    shadowOffset: {width: 0, height: 6},
-    shadowRadius: 10,
-    elevation: 2,
+    justifyContent: 'flex-end',
+    minWidth: 42,
   },
-  saveButton: {
-    alignSelf: 'flex-start',
-    backgroundColor: BLUE,
+  avatarWrap: {
+    overflow: 'hidden',
+    backgroundColor: '#f3f6ff',
+    marginRight: 8,
+  },
+  avatarInitialsWrap: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarInitials: {
+    color: COLORS.blue,
+    fontWeight: '700',
+  },
+  headerUsername: {
+    fontSize: 13,
+    color: COLORS.text,
+    maxWidth: 90,
+  },
+  scrollContent: {
+    paddingTop: 8,
+    paddingBottom: 34,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 14,
+    paddingBottom: 16,
+  },
+  pageHeading: {
+    color: COLORS.blue,
+    fontSize: 18,
+    fontWeight: '900',
+    marginLeft: 8,
+  },
+  walletBlock: {
+    marginTop: 30,
+  },
+  blockTitle: {
+    color: COLORS.blue,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  blockSubtitle: {
+    color: COLORS.muted,
+    fontSize: 13,
+    marginTop: 4,
+  },
+  walletOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 14,
+    marginTop: 10,
+  },
+  walletOptionMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  walletLogo: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#f2f0ed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  walletOptionTitle: {
+    color: COLORS.text,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  cardsBlock: {
+    marginTop: 24,
+  },
+  blockHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  addCardButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.blue,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  addCardButtonText: {
+    color: COLORS.blue,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.surface,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 24,
+  },
+  emptyIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: '#f2f0ed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  emptyTitle: {
+    color: COLORS.text,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  emptyText: {
+    color: COLORS.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 6,
+    textAlign: 'center',
+  },
+  emptyButton: {
+    marginTop: 14,
+    backgroundColor: COLORS.softBlue,
+    borderWidth: 1,
+    borderColor: '#cfe2ff',
+    borderRadius: 999,
     paddingHorizontal: 16,
     paddingVertical: 10,
-    borderRadius: 8,
-    marginTop: 18,
   },
-  saveButtonText: {color: '#fff', fontSize: 14, fontWeight: '600'},
-
-  /* empty state / cards list */
-  emptyBox: {
-    padding: 14,
-    borderRadius: 12,
-    backgroundColor: '#fbfbff',
-    borderWidth: 1,
-    borderColor: '#eef1ff',
+  emptyButtonText: {
+    color: COLORS.accent,
+    fontSize: 13,
+    fontWeight: '900',
   },
   cardsList: {
-    marginTop: 8,
-    paddingVertical: 4,
+    marginTop: 2,
   },
-  cardItem: {
+  cardRow: {
     width: '100%',
-    backgroundColor: '#fff',
-    borderRadius: 10,
+    backgroundColor: COLORS.surface,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#eef1ff',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    marginBottom: 8,
+    borderColor: COLORS.border,
+    padding: 13,
+    marginBottom: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    elevation: 1,
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowOffset: {width: 0, height: 3},
-    shadowRadius: 6,
   },
-  cardLabel: {fontSize: 16, color: '#222', fontWeight: '700'},
-  cardMeta: {fontSize: 13, color: '#666', marginTop: 6},
-  cardAction: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
+  cardRowSelected: {
+    borderColor: COLORS.text,
+  },
+  cardBrandMark: {
+    width: 52,
+    height: 36,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
     borderWidth: 1,
-    borderColor: '#e6eefc',
-    backgroundColor: '#fff',
   },
-
-  /* modal */
-  modalKeyboardAvoider: {
+  cardBrandMark_visa: {backgroundColor: '#ffffff', borderColor: '#d8dde8'},
+  cardBrandMark_mastercard: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e8ded3',
+  },
+  cardBrandMark_amex: {backgroundColor: '#ffffff', borderColor: '#d8e7f2'},
+  cardBrandMark_generic: {
+    backgroundColor: '#f7f6f3',
+    borderColor: COLORS.border,
+  },
+  cardBrandText: {
+    color: COLORS.text,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  cardBrandTextVisa: {
+    color: '#1a4fb7',
+    fontSize: 13,
+    fontStyle: 'italic',
+    letterSpacing: 0.5,
+  },
+  mastercardLogo: {
+    width: 32,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mastercardCircle: {
+    position: 'absolute',
+    width: 19,
+    height: 19,
+    borderRadius: 10,
+  },
+  mastercardCircleLeft: {
+    left: 3,
+    backgroundColor: '#eb001b',
+    opacity: 0.92,
+  },
+  mastercardCircleRight: {
+    right: 3,
+    backgroundColor: '#f79e1b',
+    opacity: 0.92,
+  },
+  cardTopLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  cardTitle: {
+    color: COLORS.text,
+    fontSize: 14,
+    fontWeight: '900',
+    marginRight: 6,
+  },
+  cardSub: {
+    color: COLORS.muted,
+    fontSize: 12,
+    marginTop: 4,
+  },
+  preferredChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fefefe',
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  preferredChipText: {
+    color: COLORS.blue,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  cardActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 6,
+  },
+  cardIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 4,
+    backgroundColor: '#f7f6f3',
+  },
+  addContent: {
+    paddingTop: 10,
+    paddingBottom: 110,
+  },
+  cardPreview: {
+    minHeight: 190,
+    borderRadius: 24,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 20,
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  cardPreviewTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  cardPreviewBrand: {
+    color: COLORS.text,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  cardPreviewChip: {
+    width: 34,
+    height: 25,
+    borderRadius: 8,
+    backgroundColor: '#f0d89f',
+  },
+  cardPreviewNumber: {
+    color: COLORS.text,
+    fontSize: 23,
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  cardPreviewBottom: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  cardPreviewLabel: {
+    color: COLORS.muted,
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  cardPreviewValue: {
+    color: COLORS.text,
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: 4,
+    maxWidth: 180,
+  },
+  formBlock: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 16,
+    marginTop: 18,
+  },
+  formTitle: {
+    color: COLORS.text,
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  inputWrap: {
+    height: 50,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 14,
+    backgroundColor: COLORS.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    marginTop: 14,
+  },
+  input: {
     flex: 1,
-    backgroundColor: 'transparent',
+    color: COLORS.text,
+    fontSize: 14,
+    fontWeight: '700',
+    paddingVertical: 0,
   },
-  modalOverlay: {
+  stripeFieldWrap: {
+    width: '100%',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surface,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    marginTop: 14,
+  },
+  preferenceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.faint,
+  },
+  preferenceTitle: {
+    color: COLORS.text,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  preferenceSub: {
+    color: COLORS.muted,
+    fontSize: 12,
+    marginTop: 3,
+  },
+  addFooter: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 16,
+    backgroundColor: 'rgba(247,247,245,0.96)',
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+  },
+  secondaryButton: {
+    flex: 1,
+    height: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginRight: 8,
+  },
+  secondaryButtonText: {
+    color: COLORS.text,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  primaryButton: {
+    flex: 1,
+    height: 48,
+    borderRadius: 14,
+    borderColor: COLORS.blue,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.surface,
+    marginLeft: 8,
+  },
+  primaryButtonText: {
+    color: COLORS.blue,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  // Modal WebView de PayPal
+  paypalModal: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+  },
+  paypalModalHeader: {
+    height: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    backgroundColor: COLORS.bg,
+  },
+  paypalModalTitle: {
+    color: COLORS.text,
+    fontSize: 16,
+    fontWeight: '800',
+    flex: 1,
+    textAlign: 'center',
+  },
+  paypalWebView: {
+    flex: 1,
+  },
+  paypalWebViewLoader: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.bg,
+    zIndex: 10,
+  },
+  paypalWebViewLoaderText: {
+    marginTop: 12,
+    color: COLORS.muted,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  deleteOverlay: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 22,
   },
-  modalBackdrop: {
+  deleteBackdrop: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(8,10,20,0.6)',
+    backgroundColor: 'rgba(10,10,10,0.48)',
   },
-  modalContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
+  deleteModalBox: {
     width: '100%',
-    overflow: 'hidden',
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 8},
-    shadowOpacity: 0.16,
-    shadowRadius: 10,
-  },
-  modalGradient: {
-    paddingVertical: 10,
-    marginLeft: 15,
-    marginRight: 15,
-    marginBottom: 15,
+    maxWidth: 360,
+    backgroundColor: COLORS.surface,
+    borderRadius: 20,
+    padding: 18,
     alignItems: 'center',
   },
-  modalClose: {position: 'absolute', top: 6, right: 2, zIndex: 10, padding: 6},
-  modalTitle: {fontSize: 15, fontWeight: '800', color: BLUE, marginBottom: 8},
-
-  cardPreview: {
-    width: '100%',
-    borderRadius: 12,
-    padding: 14,
-    marginVertical: 8,
-    backgroundColor: '#fff',
-    borderWidth: 1.6,
-    borderColor: SOFT_BLUE,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  deleteIconCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#fff1f1',
     alignItems: 'center',
-  },
-
-  cardNumber: {
-    color: '#222',
-    marginTop: 10,
-    fontSize: 18,
-    letterSpacing: 1.2,
-    fontWeight: '700',
-  },
-  cardHolder: {
-    color: '#222',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  expiryText: {
-    color: '#0046ff',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-
-  inputRow: {
-    width: '100%',
-    backgroundColor: '#fbfbfd',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#eef1f6',
-    paddingHorizontal: 9,
-    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
-    marginBottom: 8,
-  },
-  inputPlain: {fontSize: 13, color: '#222', padding: 0},
-
-  row: {flexDirection: 'row', justifyContent: 'space-between', width: '100%'},
-
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-    marginTop: 10,
+    justifyContent: 'center',
     marginBottom: 10,
   },
-  cancelButton: {
-    flex: 1,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#dbe4ff',
-    paddingVertical: 8,
-    borderRadius: 8,
-    marginRight: 8,
-    alignItems: 'center',
+  deleteTitle: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: COLORS.text,
   },
-  cancelButtonText: {color: BLUE, fontWeight: '700', fontSize: 13},
-  saveButtonModal: {
-    flex: 1,
-    backgroundColor: BLUE,
-    paddingVertical: 8,
-    borderRadius: 8,
-    marginLeft: 8,
+  deleteMessage: {
+    color: COLORS.muted,
+    fontSize: 13,
+    marginTop: 6,
+    textAlign: 'center',
+  },
+  deleteCardPreview: {
+    width: '100%',
+    flexDirection: 'row',
     alignItems: 'center',
+    marginTop: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.bg,
+    padding: 12,
+  },
+  deleteCardTitle: {
+    color: COLORS.text,
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  deleteCardSub: {
+    color: COLORS.muted,
+    fontSize: 12,
+    marginTop: 3,
+  },
+  deleteButtons: {
+    width: '100%',
+    flexDirection: 'row',
+    marginTop: 16,
+  },
+  deleteCancelButton: {
+    flex: 1,
+    alignItems: 'center',
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingVertical: 11,
+    marginRight: 8,
+    backgroundColor: COLORS.surface,
+  },
+  deleteCancelText: {
+    color: COLORS.text,
+    fontWeight: '900',
+  },
+  deleteConfirmButton: {
+    flex: 1,
+    alignItems: 'center',
+    borderRadius: 13,
+    paddingVertical: 11,
+    marginLeft: 8,
+    backgroundColor: COLORS.danger,
+  },
+  deleteConfirmText: {
+    color: '#fff',
+    fontWeight: '900',
   },
 });
 
-/* toast styles */
 const toastStyles = StyleSheet.create({
   container: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'flex-start',
-    paddingTop: Platform.OS === 'ios' ? 44 : 20,
+    paddingTop: Platform.OS === 'ios' ? 84 : 64,
     zIndex: 9999,
     elevation: 9999,
   },
   toast: {
-    minWidth: 140,
+    minWidth: 160,
     maxWidth: '86%',
     paddingHorizontal: 12,
     paddingVertical: 10,
-    backgroundColor: '#fff',
-    borderRadius: 10,
+    backgroundColor: COLORS.surface,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#f0f0f0',
+    borderColor: COLORS.border,
     shadowColor: '#000',
     shadowOpacity: 0.08,
     shadowOffset: {width: 0, height: 6},
@@ -977,7 +2126,8 @@ const toastStyles = StyleSheet.create({
   },
   toastText: {
     fontSize: 13,
-    color: '#222',
+    color: COLORS.text,
     textAlign: 'center',
+    fontWeight: '700',
   },
 });

@@ -123,7 +123,7 @@ export default function RatingSuccessScreen() {
           {height: headerHeight, paddingHorizontal: clamp(rf(12), 8, 20)},
         ]}>
         <TouchableOpacity
-          onPress={() => navigation.navigate('ExperiencesMain')}
+          onPress={() => navigation.popToTop()}
           style={styles.headerBtn}>
           <Ionicons
             name="chevron-back"
@@ -195,7 +195,7 @@ export default function RatingSuccessScreen() {
 
           <TouchableOpacity
             activeOpacity={0.92}
-            onPress={() => navigation.navigate('ExperiencesMain')}
+            onPress={() => navigation.popToTop()}
             style={[styles.btnWrapper, {width: '100%'}]}>
             <LinearGradient
               colors={['#9F4CFF', '#6A43FF', '#2C7DFF']}

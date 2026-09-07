@@ -1,4 +1,4 @@
-//oneSignal
+//Cambios agosto
 import React, {useState, useRef} from 'react';
 import {
   View,
@@ -23,6 +23,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {Keyboard} from 'react-native';
 import {TOKEN, ensureToken} from '../auth/tokenManager';
 import {
+  setOneSignalEmail,
   setOneSignalExternalUserId,
   sendOneSignalTags,
 } from '../services/oneSignalService';
@@ -167,6 +168,47 @@ export default function Login() {
       }, duration);
     });
   };
+  // ─── REFUERZO: verificar doble_verificacion en la API antes de dejar entrar ───
+  const checkDobleVerificacion = async userMail => {
+    try {
+      await ensureToken();
+      const token =
+        typeof TOKEN === 'string' && TOKEN.trim() ? TOKEN.trim() : null;
+
+      const res = await fetch(
+        `${API_BASE}/usuarios?mail=${encodeURIComponent(
+          userMail.trim(),
+        )}&presign_ttl=30`,
+        {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            ...(token ? {Authorization: `Bearer ${token}`} : {}),
+          },
+        },
+      );
+
+      if (!res.ok) {
+        // Si la API falla, dejamos pasar (no bloqueamos por un error de red)
+        console.warn('checkDobleVerificacion: API error', res.status);
+        return true;
+      }
+
+      const json = await res.json();
+      const usuario = json?.usuarios?.[0] ?? null;
+
+      if (!usuario) {
+        // No encontró usuario, dejar pasar
+        return true;
+      }
+
+      return usuario.doble_verificacion === true;
+    } catch (err) {
+      // Si falla la consulta, no bloqueamos (mejor UX que quedar atrapado)
+      console.warn('checkDobleVerificacion: fetch error', err);
+      return true;
+    }
+  };
 
   const handleLogin = async () => {
     Keyboard.dismiss();
@@ -202,6 +244,44 @@ export default function Login() {
       if (res.status === 200) {
         const usuario = data.usuario || {};
 
+        // ─── REFUERZO: antes de guardar sesión, verificar doble verificación ───
+        const tieneDobleVerif = await checkDobleVerificacion(mail.trim());
+
+        if (!tieneDobleVerif) {
+          // Guardar el email para que la pantalla de verificación lo tenga
+          await AsyncStorage.setItem(
+            'user_email',
+            String(usuario.mail || mail.trim()),
+          );
+          await AsyncStorage.setItem(
+            'email',
+            String(usuario.mail || mail.trim()),
+          );
+
+          // Registrar que hay verificación pendiente
+          await AsyncStorage.setItem(
+            'pendingVerification',
+            JSON.stringify({
+              email: usuario.mail || mail.trim(),
+              createdAt: Date.now(),
+            }),
+          );
+
+          // Toast de aviso y redirección a verificación
+          showToast(
+            'Debes completar la verificación de tu cuenta',
+            false,
+            2000,
+            () =>
+              navigation.navigate('Verificacion', {
+                email: usuario.mail || mail.trim(),
+              }),
+          );
+          return;
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
+        // Login normal: guardar todos los datos de sesión
         for (const [key, value] of Object.entries(usuario)) {
           if (value !== null && value !== undefined) {
             await AsyncStorage.setItem(`user_${key}`, String(value));
@@ -223,8 +303,10 @@ export default function Login() {
         }`.trim();
         await AsyncStorage.setItem('user_fullname', fullname);
 
-        if (usuario.mail) {
-          await AsyncStorage.setItem('user_email', usuario.mail);
+        const userEmail = usuario.mail || mail.trim();
+        if (userEmail) {
+          await AsyncStorage.setItem('user_email', userEmail);
+          await setOneSignalEmail(userEmail);
         }
 
         try {
@@ -380,6 +462,12 @@ export default function Login() {
           );
         }
 
+        // Limpiar cualquier flag de verificación pendiente ya que la pasó
+        try {
+          await AsyncStorage.removeItem('pendingVerification');
+        } catch (_) {}
+
+        //     //No borrar
         await AsyncStorage.multiSet([
           ['session_active', '1'],
           ['session_guest', '0'],
@@ -417,103 +505,6 @@ export default function Login() {
   const handleOpenTerms = () => {
     navigation.navigate('Terms');
   };
-  /*
-  useEffect(() => {
-    let alive = true;
-
-    const bootstrap = async () => {
-      try {
-        // Block Login UI until we decide what to do
-        if (alive) {
-          setCanRenderLogin(false);
-          setBooting(true);
-        }
-
-        // 1) If session is active, never show Login UI at all
-        const sessionActive = await AsyncStorage.getItem('session_active');
-        if (sessionActive === '1') {
-          navigation.reset({index: 0, routes: [{name: 'Home'}]});
-          return; // keep canRenderLogin = false so Login never renders
-        }
-        // 2) Try recents first
-        const rawRecents = await AsyncStorage.getItem('recent_accounts_v1');
-        let recents = [];
-        try {
-          recents = rawRecents ? JSON.parse(rawRecents) : [];
-        } catch {
-          recents = [];
-        }
-        if (!Array.isArray(recents)) recents = [];
-
-        const top = recents[0]; // you already unshift() newest
-        const recentOk =
-          top?.email &&
-          top?.savedAt &&
-          Date.now() - Number(top.savedAt) <= QUICK_LOGIN_MAX_AGE_MS;
-
-        if (recentOk) {
-          setQuickProfile({
-            email: top.email,
-            fullname: top.fullname || '',
-            avatarUrl: top.avatarUrl || null,
-          });
-          setQuickMode(false);
-          setShowFullLogin(false);
-          setCanRenderLogin(true);
-          setBooting(false);
-          return;
-        }
-
-        // 2) Otherwise, proceed with your existing quick-card logic
-        const pairs = await AsyncStorage.multiGet([
-          'user_email',
-          'user_fullname',
-          'user_profile_url',
-          'last_login_at',
-        ]);
-
-        const map = Object.fromEntries(pairs);
-        const email = map.user_email || '';
-        const fullname = map.user_fullname || '';
-        const avatarUrl = map.user_profile_url || null;
-        const lastLoginAt = Number(map.last_login_at || '0');
-
-        const isRecent =
-          lastLoginAt > 0 && Date.now() - lastLoginAt <= QUICK_LOGIN_MAX_AGE_MS;
-
-        if (!alive) return;
-
-        if (email && isRecent) {
-          setQuickProfile({email, fullname, avatarUrl});
-          setQuickMode(false);
-          setShowFullLogin(false);
-        } else {
-          setQuickProfile(null);
-          setShowFullLogin(true);
-        }
-
-        setCanRenderLogin(true);
-      } catch (e) {
-        if (!alive) return;
-        setQuickProfile(null);
-        setShowFullLogin(true);
-        setCanRenderLogin(true);
-      } finally {
-        if (alive) setBooting(false);
-      }
-    };
-
-    bootstrap();
-
-    return () => {
-      alive = false;
-    };
-  }, [navigation]);
-
-  if (!canRenderLogin) {
-    return <View style={{flex: 1, backgroundColor: '#fff'}} />;
-  }
-*/
 
   return (
     <View style={{width: '100%', flex: 1, backgroundColor: '#fff'}}>

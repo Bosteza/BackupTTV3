@@ -271,7 +271,8 @@ function makeStyles({width, height, clamp, wp, hp, rf}) {
     },
 
     miniInfoRow: {
-      marginTop: 12,
+      marginTop: 4,
+      transform: [{translateY: -6}],
       width: '100%',
       flexDirection: 'row',
       justifyContent: 'space-between',

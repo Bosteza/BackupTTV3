@@ -1,4 +1,4 @@
-//token implementation
+//Creo que ya?? Revisar estilos
 import React, {useEffect, useMemo, useState} from 'react';
 import {
   SafeAreaView,
@@ -18,6 +18,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import {useNavigation, useRoute} from '@react-navigation/native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {TOKEN, ensureToken} from '../auth/tokenManager';
+
 const API_BASE_URL = 'https://api.tab-track.com';
 const formatMoney = n => {
   const value = Number(n);
@@ -28,7 +29,6 @@ const formatMoney = n => {
 
   return `${formattedInteger}.${decimalPart}`;
 };
-
 const totalFontSizeFor = str => {
   const len = String(str).length;
   if (len > 14) return 12;
@@ -112,11 +112,13 @@ export default function Consumo() {
     let mounted = true;
     const fetchIfNeeded = async () => {
       if (items && Array.isArray(items)) return;
+
       try {
         await ensureToken();
       } catch (e) {
         console.warn('No se pudo asegurar token:', e);
       }
+
       if (!token) {
         openError(
           'Error',
@@ -484,7 +486,7 @@ export default function Consumo() {
       {errorModal.visible && (
         <View style={styles.modalBackdrop}>
           <LinearGradient
-            colors={['#9F4CFF', '#6A43FF', '#2C7DFF']}
+            colors={['#0b58ff', '#0b58ff', '#0b58ff']}
             style={styles.modalBox}>
             <Text style={styles.modalTitle}>{errorModal.title}</Text>
             <Text style={styles.modalMessage}>{errorModal.message}</Text>

@@ -590,11 +590,7 @@ export default function InfoPersonal({navigation}) {
     <SafeAreaView style={[styles.container, {paddingTop: topSafe}]}>
       <StatusBar barStyle="dark-content" />
 
-      <View
-        style={[
-          styles.header,
-          {paddingVertical: headerPadV, paddingHorizontal: headerPadH},
-        ]}>
+      <View style={styles.headerLeft}>
         <TouchableOpacity
           onPress={() => navigation.goBack()}
           style={styles.backButton}
@@ -603,7 +599,11 @@ export default function InfoPersonal({navigation}) {
           <Ionicons name="arrow-back" size={iconSize} color={BLUE} />
         </TouchableOpacity>
 
-        <Text style={[styles.headerTitle, {fontSize: titleFont}]}>Perfil</Text>
+        <Text
+          style={[styles.headerTitle, {fontSize: titleFont}]}
+          numberOfLines={1}>
+          Perfil
+        </Text>
 
         <View style={styles.headerRight}>
           <View
@@ -649,7 +649,7 @@ export default function InfoPersonal({navigation}) {
               },
             ]}
             numberOfLines={1}>
-            {user.nombre || 'Usuario'}
+            {`${user.nombre || ''} ${user.apellido || ''}`.trim() || 'Usuario'}
           </Text>
         </View>
       </View>
@@ -1006,15 +1006,27 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: BLUE,
   },
+
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 1,
+    minWidth: 0,
+  },
+
   headerTitle: {
     fontWeight: '700',
     color: '#0046ff',
-    textAlign: 'center',
-    flex: 1,
+    textAlign: 'left',
     fontFamily: 'Montserrat-Bold',
-    right: 90,
+    flexShrink: 1,
   },
-  headerRight: {flexDirection: 'row', alignItems: 'center', marginLeft: 'auto'},
+
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 'auto',
+  },
   profileAvatar: {width: 32, height: 32, borderRadius: 16, marginHorizontal: 8},
   username: {
     fontSize: 16,
@@ -1022,7 +1034,13 @@ const styles = StyleSheet.create({
     marginRight: 16,
     fontFamily: 'Montserrat-Regular',
   },
-  backButton: {marginRight: -5},
+  backButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 6,
+  },
   scrollContent: {paddingTop: 16, paddingBottom: 32},
   sectionHeader: {flexDirection: 'row', alignItems: 'center', marginBottom: 12},
   sectionTitle: {

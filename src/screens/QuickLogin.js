@@ -1,4 +1,4 @@
-//OneSignal
+//Flag parece que ya
 import React, {useState, useRef} from 'react';
 import {
   SafeAreaView,
@@ -22,8 +22,8 @@ import {useNavigation, useRoute} from '@react-navigation/native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {TOKEN, ensureToken} from '../auth/tokenManager';
 import {
+  setOneSignalEmail,
   setOneSignalExternalUserId,
-  sendOneSignalTags,
 } from '../services/oneSignalService';
 
 const API_HOST = 'https://api.tab-track.com';
@@ -176,15 +176,21 @@ export default function QuickLoginScreen() {
           usuario.apellido || ''
         }`.trim();
         if (fullname) await AsyncStorage.setItem('user_fullname', fullname);
-        if (usuario.mail)
-          await AsyncStorage.setItem('user_email', usuario.mail);
+        const userEmail = usuario.mail || email;
+        if (userEmail) {
+          await AsyncStorage.setItem('user_email', String(userEmail));
+          await setOneSignalEmail(userEmail);
+        }
         if (usuario.foto_perfil_url)
           await AsyncStorage.setItem(
             'user_profile_url',
             usuario.foto_perfil_url,
           );
       } else {
-        if (email) await AsyncStorage.setItem('user_email', String(email));
+        if (email) {
+          await AsyncStorage.setItem('user_email', String(email));
+          await setOneSignalEmail(email);
+        }
       }
     } catch (e) {
       console.warn('QuickLogin save auth error', e);

@@ -1,4 +1,4 @@
-//token
+//Cambios agosto
 import React, {useState, useEffect, useRef} from 'react';
 import {
   SafeAreaView,
@@ -150,19 +150,25 @@ export default function Cuenta({navigation}) {
       });
 
       const data = await res.json().catch(() => null);
-      if (res.status === 201) {
-        try {
-          await AsyncStorage.removeItem(DRAFT_KEY);
-        } catch (err) {
-          console.warn('No se pudo borrar draft tras registro:', err);
-        }
 
-        try {
-          await AsyncStorage.setItem('user_email', String(mail));
-          await AsyncStorage.setItem('email', String(mail));
-        } catch (e) {
-          console.warn('No se pudo persistir email en AsyncStorage:', e);
-        }
+      if (res.status === 201) {
+        // ─── FIX: guardar pendingVerification y email ANTES de cualquier
+        //         operación de red que pueda fallar, para que si la app
+        //         se cierra en este momento el flag ya esté guardado ───
+        const normalizedMail = String(mail).trim();
+
+        await Promise.all([
+          AsyncStorage.removeItem(DRAFT_KEY).catch(() => {}),
+          AsyncStorage.setItem('user_email', normalizedMail),
+          AsyncStorage.setItem('email', normalizedMail),
+          // Guardamos pendingVerification AQUÍ, antes del envío del código
+          AsyncStorage.setItem(
+            'pendingVerification',
+            JSON.stringify({email: normalizedMail, createdAt: Date.now()}),
+          ),
+        ]);
+
+        // Intentar enviar el código de verificación (puede fallar sin problema)
 
         let sendOk = false;
         try {
@@ -173,7 +179,7 @@ export default function Cuenta({navigation}) {
               'Content-Type': 'application/json',
               ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
             },
-            body: JSON.stringify({email: mail}),
+            body: JSON.stringify({email: normalizedMail}),
           });
 
           if (sendRes.ok) {
@@ -196,7 +202,7 @@ export default function Cuenta({navigation}) {
             routes: [
               {
                 name: 'Verificacion',
-                params: {email: mail, verificationSent: !!sendOk},
+                params: {email: normalizedMail, verificationSent: !!sendOk},
               },
             ],
           }),

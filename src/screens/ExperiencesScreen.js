@@ -1,4 +1,4 @@
-//token
+//20 agosto falta test
 import React, {useEffect, useState, useRef, useCallback} from 'react';
 
 import {
@@ -935,10 +935,11 @@ export default function VisitsScreen(props) {
           startOfHoy.getTime() - MAX_RANGE_DAYS * 24 * 60 * 60 * 1000,
         );
         setDesdeDate(cappedDate);
+        // FIX: Mensaje claro sobre el límite del API
         Toast.show(
-          `Rango muy grande. Se limita a ${MAX_RANGE_DAYS} días (desde ${formatDateYMD(
+          `El rango máximo es ${MAX_RANGE_DAYS} días. Mostrando desde ${formatDateYMD(
             cappedDate,
-          )})`,
+          )}.`,
           {duration: Toast.durations.LONG},
         );
         desdeCandidate.setTime(cappedDate.getTime());
@@ -948,11 +949,13 @@ export default function VisitsScreen(props) {
       const hastaStr = formatDateYMD(new Date());
 
       const base = API_BASE_URL.replace(/\/$/, '');
+      // FIX: Sin &light=1 — el primer fetch ya trae toda la info necesaria
+      // (fecha_cierre_venta, items_consumidos, pagos, nombres, totales)
       const urlVentas = `${base}/api/mobileapp/usuarios/consumos?email=${encodeURIComponent(
         email,
       )}&desde=${encodeURIComponent(desdeStr)}&hasta=${encodeURIComponent(
         hastaStr,
-      )}&light=1`;
+      )}`;
       let resVentas;
       try {
         await ensureToken();
@@ -968,6 +971,7 @@ export default function VisitsScreen(props) {
         setFetchingSales(false);
         return;
       }
+
       if (!resVentas.ok) {
         const txt = await resVentas.text().catch(() => '');
         console.warn('ventas http error', resVentas.status, txt);
@@ -977,50 +981,25 @@ export default function VisitsScreen(props) {
         setFetchingSales(false);
         return;
       }
-      let jsonVentas = await resVentas.json().catch(() => ({}));
-      let ventaArray = Array.isArray(jsonVentas?.venta_id)
+
+      const jsonVentas = await resVentas.json().catch(() => ({}));
+      const ventaArray = Array.isArray(jsonVentas?.venta_id)
         ? jsonVentas.venta_id
         : [];
 
+      // FIX: Sin fallback silencioso — si no hay resultados, avisamos claramente
       if (!ventaArray || ventaArray.length === 0) {
-        const last30 = new Date();
-        last30.setDate(last30.getDate() - 29);
-        const last30DesdeStr = formatDateYMD(last30);
-        const last30Url = `${base}/api/mobileapp/usuarios/consumos?email=${encodeURIComponent(
-          email,
-        )}&desde=${encodeURIComponent(
-          last30DesdeStr,
-        )}&hasta=${encodeURIComponent(hastaStr)}&light=1`;
-
-        try {
-          await ensureToken();
-          const resLast30 = await fetch(last30Url, {
-            method: 'GET',
-            headers: getAuthHeaders(),
-          });
-          if (resLast30 && resLast30.ok) {
-            const jsonLast = await resLast30.json().catch(() => ({}));
-            const ventaArrayLast = Array.isArray(jsonLast?.venta_id)
-              ? jsonLast.venta_id
-              : [];
-            if (ventaArrayLast && ventaArrayLast.length > 0) {
-              ventaArray = ventaArrayLast;
-            }
-          } else {
-          }
-        } catch (e) {
-          console.warn('fallback last30 fetch error', e);
-        }
-      }
-      if (!ventaArray || ventaArray.length === 0) {
-        Toast.show('No se encontraron ventas en ese rango', {
-          duration: Toast.durations.SHORT,
-        });
+        Toast.show(
+          `No hay visitas entre ${desdeStr} y ${hastaStr}. Intenta con otro rango de fechas.`,
+          {duration: Toast.durations.LONG},
+        );
         setVisits([]);
         setFetchingSales(false);
+        setLoading(false);
         return;
       }
 
+      // FIX: Map keyed por venta_id+sucursal_id para evitar duplicados desde el inicio
       const visitsMap = new Map();
 
       for (const v of ventaArray) {
@@ -1028,204 +1007,110 @@ export default function VisitsScreen(props) {
           const ventaId = v?.venta_id ?? v?.sale_id ?? null;
           const sucursalId = v?.sucursal_id ?? v?.sucursal ?? null;
           if (!ventaId || !sucursalId) continue;
-          const urlDetalle = `${API_BASE_URL.replace(
-            /\/$/,
-            '',
-          )}/api/mobileapp/usuarios/consumos?venta_id=${encodeURIComponent(
-            ventaId,
-          )}&sucursal_id=${encodeURIComponent(
-            sucursalId,
-          )}&desde=${encodeURIComponent(desdeStr)}&hasta=${encodeURIComponent(
-            hastaStr,
-          )}`;
-          await ensureToken();
-          const resDetalle = await fetch(urlDetalle, {
-            method: 'GET',
-            headers: getAuthHeaders(),
-          });
-          if (!resDetalle.ok) {
-            console.warn('detalle http not ok', resDetalle.status);
-            continue;
-          }
-          const jsonDet = await resDetalle.json().catch(() => null);
-          if (!jsonDet) continue;
 
-          const rootVentaId = jsonDet?.venta_id ?? ventaId;
-          const rootSucursalId = jsonDet?.sucursal_id ?? sucursalId;
-          const emailsObj = jsonDet?.emails ?? null;
+          const key = `${ventaId}_${sucursalId}`;
 
-          const upsertVisit = async saleEntry => {
-            const computedTotal = computeSaleTotal(saleEntry);
-            //No borrar
-            const pagosForDate = Array.isArray(saleEntry?.pagos)
-              ? saleEntry.pagos
-              : Array.isArray(jsonDet?.pagos)
-              ? jsonDet.pagos
-              : [];
+          // FIX: Si ya procesamos esta combinación, la saltamos (anti-duplicado)
+          if (visitsMap.has(key)) continue;
 
-            const itemsForDate = Array.isArray(saleEntry?.items_consumidos)
-              ? saleEntry.items_consumidos
-              : Array.isArray(saleEntry?.items)
-              ? saleEntry.items
-              : [];
+          // FIX: Fecha tomada del objeto del API, sin fallback a new Date()
+          // Si viene null, la tarjeta mostrará '—' en lugar de hora inventada
+          const fechaCierreRaw =
+            v?.fecha_cierre_venta ??
+            v?.fecha_cierre ??
+            v?.fecha_pago ??
+            v?.created_at ??
+            v?.fecha ??
+            null;
 
-            const firstPaidPago = pagosForDate.find(p => {
-              const status = String(p?.status ?? p?.estado ?? '').toLowerCase();
-              return status === 'confirmed' || status === 'paid';
-            });
+          const computedTotal = computeSaleTotal(v);
 
-            const firstPaidItem = itemsForDate.find(it => {
-              const state = String(it?.estado ?? '').toLowerCase();
-              return state === 'confirmed' || state === 'paid';
-            });
-
-            const fechaCierre =
-              firstPaidPago?.fecha_pago ??
-              firstPaidPago?.fecha_creacion ??
-              firstPaidItem?.fecha_pago ??
-              firstPaidItem?.fecha_creacion ??
-              saleEntry?.fecha_pago ??
-              saleEntry?.fecha_creacion ??
-              saleEntry?.fecha_cierre_venta ??
-              null;
-            const key = `${rootVentaId}_${rootSucursalId}`;
-            const candidate = {
-              id: `${rootVentaId}_${rootSucursalId}`,
-              sale_id:
-                rootVentaId ??
-                saleEntry?.venta_id ??
-                saleEntry?.sale_id ??
-                null,
-              restaurante_id:
-                saleEntry?.restaurante_id ?? saleEntry?.restaurante ?? null,
-              sucursal_id:
-                saleEntry?.sucursal_id ??
-                rootSucursalId ??
-                saleEntry?.sucursal ??
-                null,
-              restaurantName: saleEntry?.nombre_restaurante ?? null,
-              branchName: saleEntry?.nombre_sucursal ?? null,
-              restaurantImage: null,
-              bannerImage: null,
-              fecha: fechaCierre,
-              total: computedTotal,
-              moneda: 'MXN',
-              items: Array.isArray(saleEntry?.items_consumidos)
-                ? saleEntry.items_consumidos
-                : Array.isArray(saleEntry?.items)
-                ? saleEntry.items
-                : [],
-              pagos: Array.isArray(saleEntry?.pagos)
-                ? saleEntry.pagos
-                : Array.isArray(jsonDet?.pagos)
-                ? jsonDet.pagos
-                : [],
-            };
-
-            try {
-              if (candidate.restaurante_id) {
-                const restInfo = await ensureRestaurantInfo(
-                  candidate.restaurante_id,
-                  false,
-                );
-                const branches = await ensureBranchesForRestaurant(
-                  candidate.restaurante_id,
-                  false,
-                );
-                let matchedBranch = null;
-                if (Array.isArray(branches) && branches.length > 0) {
-                  for (const b of branches) {
-                    const candidates = [b.id, b.sucursal_id, b.codigo];
-                    for (const cand of candidates) {
-                      if (cand === undefined || cand === null) continue;
-                      if (String(cand) === String(candidate.sucursal_id)) {
-                        matchedBranch = b;
-                        break;
-                      }
-                    }
-                    if (matchedBranch) break;
-                  }
-                  if (!matchedBranch && branches.length === 1)
-                    matchedBranch = branches[0];
-                }
-                if (matchedBranch) {
-                  candidate.restaurantImage = branchGetLogoUrl(matchedBranch)
-                    ? getCacheBustedUrl(branchGetLogoUrl(matchedBranch))
-                    : candidate.restaurantImage;
-                  candidate.bannerImage = branchGetBannerUrl(matchedBranch)
-                    ? getCacheBustedUrl(branchGetBannerUrl(matchedBranch))
-                    : candidate.bannerImage;
-                  if (!candidate.branchName)
-                    candidate.branchName = branchGetName(matchedBranch);
-                }
-                if (!candidate.restaurantImage && restInfo) {
-                  const candLogo =
-                    restInfo?.imagen_logo_url ??
-                    restInfo?.logo ??
-                    restInfo?.imagen_logo;
-                  if (candLogo)
-                    candidate.restaurantImage = getCacheBustedUrl(candLogo);
-                }
-              }
-            } catch (e) {
-              /* ignore enrichment errors */
-            }
-
-            if (visitsMap.has(key)) {
-              const existing = visitsMap.get(key);
-              const existingTs = new Date(existing.fecha).getTime() || 0;
-              const candTs = new Date(candidate.fecha).getTime() || 0;
-              const chosen = candTs >= existingTs ? candidate : existing;
-              chosen.total = Math.max(
-                Number(existing.total || 0),
-                Number(candidate.total || 0),
-              );
-              if (
-                (!existing.items || existing.items.length === 0) &&
-                candidate.items &&
-                candidate.items.length > 0
-              ) {
-                chosen.items = candidate.items;
-              } else if (
-                existing.items &&
-                candidate.items &&
-                candidate.items.length > 0 &&
-                existing.items.length !== candidate.items.length
-              ) {
-                chosen.items =
-                  candidate.items.length > existing.items.length
-                    ? candidate.items
-                    : existing.items;
-              } else {
-                chosen.items = existing.items || candidate.items;
-              }
-              visitsMap.set(key, chosen);
-            } else {
-              visitsMap.set(key, candidate);
-            }
+          const candidate = {
+            id: key,
+            sale_id: ventaId,
+            restaurante_id: v?.restaurante_id ?? v?.restaurante ?? null,
+            sucursal_id: sucursalId,
+            restaurantName: v?.nombre_restaurante ?? null,
+            branchName: v?.nombre_sucursal ?? null,
+            restaurantImage: null,
+            bannerImage: null,
+            fecha: fechaCierreRaw, // null si el API no la manda
+            total: computedTotal,
+            moneda: v?.moneda ?? 'MXN',
+            items: Array.isArray(v?.items_consumidos)
+              ? v.items_consumidos
+              : Array.isArray(v?.items)
+              ? v.items
+              : [],
+            pagos: Array.isArray(v?.pagos) ? v.pagos : [],
           };
 
-          if (emailsObj && typeof emailsObj === 'object') {
-            for (const emailKey of Object.keys(emailsObj)) {
-              const arrSales = Array.isArray(emailsObj[emailKey])
-                ? emailsObj[emailKey]
-                : [];
-              for (const saleEntry of arrSales) {
-                await upsertVisit(saleEntry);
+          // Enriquecer solo con logo/banner (no toca fecha ni total)
+          try {
+            if (candidate.restaurante_id) {
+              const restInfo = await ensureRestaurantInfo(
+                candidate.restaurante_id,
+                false,
+              );
+              const branches = await ensureBranchesForRestaurant(
+                candidate.restaurante_id,
+                true,
+              );
+
+              let matchedBranch = null;
+              if (Array.isArray(branches) && branches.length > 0) {
+                for (const b of branches) {
+                  const candidateIds = [b.id, b.sucursal_id, b.codigo];
+                  for (const cId of candidateIds) {
+                    if (
+                      cId !== undefined &&
+                      cId !== null &&
+                      String(cId) === String(candidate.sucursal_id)
+                    ) {
+                      matchedBranch = b;
+                      break;
+                    }
+                  }
+                  if (matchedBranch) break;
+                }
+                if (!matchedBranch && branches.length === 1)
+                  matchedBranch = branches[0];
+              }
+
+              if (matchedBranch) {
+                const logoUrl =
+                  matchedBranch?.imagen_logo_url ??
+                  matchedBranch?.logo_url ??
+                  matchedBranch?.imagen_logo ??
+                  null;
+                const bannerUrl =
+                  matchedBranch?.imagen_banner_url ??
+                  matchedBranch?.banner_url ??
+                  matchedBranch?.imagen_banner ??
+                  null;
+                if (logoUrl)
+                  candidate.restaurantImage = getCacheBustedUrl(logoUrl);
+                if (bannerUrl)
+                  candidate.bannerImage = getCacheBustedUrl(bannerUrl);
+                if (!candidate.branchName)
+                  candidate.branchName = branchGetName(matchedBranch);
+              }
+
+              if (!candidate.restaurantImage && restInfo) {
+                const candLogo =
+                  restInfo?.imagen_logo_url ??
+                  restInfo?.logo ??
+                  restInfo?.imagen_logo;
+                if (candLogo)
+                  candidate.restaurantImage = getCacheBustedUrl(candLogo);
               }
             }
-          } else {
-            const arrSalesRoot = Array.isArray(jsonDet?.data)
-              ? jsonDet.data
-              : Array.isArray(jsonDet?.ventas)
-              ? jsonDet.ventas
-              : null;
-            if (Array.isArray(arrSalesRoot)) {
-              for (const saleEntry of arrSalesRoot) {
-                await upsertVisit(saleEntry);
-              }
-            }
+          } catch (e) {
+            console.warn('error enriqueciendo imágenes para', key, e);
           }
+
+          // FIX: Solo insertamos una vez, nunca sobreescribimos
+          visitsMap.set(key, candidate);
         } catch (err) {
           console.warn('error processing venta entry', err);
           continue;
@@ -1233,9 +1118,10 @@ export default function VisitsScreen(props) {
       }
 
       const detailedVisits = Array.from(visitsMap.values());
+      // FIX: Visitas sin fecha van al final al ordenar
       detailedVisits.sort((a, b) => {
-        const ta = new Date(a.fecha).getTime() || 0;
-        const tb = new Date(b.fecha).getTime() || 0;
+        const ta = a.fecha ? new Date(a.fecha).getTime() || 0 : 0;
+        const tb = b.fecha ? new Date(b.fecha).getTime() || 0 : 0;
         return tb - ta;
       });
 
@@ -1246,10 +1132,11 @@ export default function VisitsScreen(props) {
         console.warn('fetchRatingsForVisits after fetchVisits err', e),
       );
 
-      if (!detailedVisits.length)
-        Toast.show('No se encontraron detalles para las ventas', {
+      if (!detailedVisits.length) {
+        Toast.show('No se encontraron visitas para las fechas seleccionadas.', {
           duration: Toast.durations.SHORT,
         });
+      }
     } catch (err) {
       console.warn('fetchVisitsForDesde error', err);
       Toast.show('Error al obtener visitas (ver consola)', {
@@ -1311,19 +1198,21 @@ export default function VisitsScreen(props) {
 
   useFocusEffect(
     useCallback(() => {
+      surveysMemRef.current = {};
+
       fetchVisitsForDesde(desdeDate);
+
       (async () => {
-        if (!emailRef.current)
+        if (!emailRef.current) {
           emailRef.current = await AsyncStorage.getItem('user_email');
-        await fetchTodayNotificationsOnce();
-        if (visits && visits.length > 0) {
-          fetchRatingsForVisits(visits).catch(e =>
-            console.warn('useFocus fetchRatingsForVisits err', e),
-          );
         }
+
+        await fetchTodayNotificationsOnce();
       })();
     }, [desdeDate]),
   );
+
+  //No borrar
   const onPressDesde = () => {
     setTempDate(desdeDate);
     setShowDatePicker(true);
@@ -1956,6 +1845,10 @@ function VisitCard({
   cardRadius = 12,
 }) {
   const [idx, setIdx] = useState(0);
+  const [logoError, setLogoError] = useState(false);
+  const [bannerError, setBannerError] = useState(false);
+
+  // FIX: Solo parseToLocalDate, sin fallback a new Date() que podría mostrar hora incorrecta
   let lastVisitText = '—';
   try {
     if (item.fecha) {
@@ -1965,15 +1858,8 @@ function VisitCard({
           dateStyle: 'medium',
           timeStyle: 'short',
         });
-      } else {
-        const dt = new Date(item.fecha);
-        if (!Number.isNaN(dt.getTime())) {
-          lastVisitText = dt.toLocaleString('es-MX', {
-            dateStyle: 'medium',
-            timeStyle: 'short',
-          });
-        }
       }
+      // Si parseToLocalDate falla, se queda '—' — nunca mostramos hora inventada
     }
   } catch (e) {
     lastVisitText = '—';
@@ -2097,10 +1983,11 @@ function VisitCard({
               borderRadius: Math.round(logoSize / 2),
             },
           ]}>
-          {logoUri ? (
+          {logoUri && !logoError ? (
             <Image
               source={{uri: logoUri}}
               style={[styles.logoImage, {width: logoSize, height: logoSize}]}
+              onError={() => setLogoError(true)}
             />
           ) : (
             <Image
@@ -2109,18 +1996,7 @@ function VisitCard({
             />
           )}
         </View>
-        {/*} <View style={styles.ratingRow}>
-          {Array.from({length: 5}, (_, i) => (
-            <Text
-              key={i}
-              style={[
-                styles.star,
-                i < 4 ? styles.starFilled : styles.starEmpty,
-              ]}>
-              ★
-            </Text>
-          ))} 
-        </View> */}
+        <View style={styles.ratingRow}>{stars}</View>
       </View>
 
       <View
@@ -2142,7 +2018,7 @@ function VisitCard({
             )
           }
           scrollEventThrottle={16}>
-          {bannerUri ? (
+          {bannerUri && !bannerError ? (
             <Image
               key={'banner'}
               source={{uri: bannerUri}}
@@ -2150,12 +2026,13 @@ function VisitCard({
                 styles.slideImage,
                 {width: slideWidth, height: CARD_SLIDE_HEIGHT},
               ]}
+              onError={() => setBannerError(true)}
             />
           ) : (
             <Image
               key={'fallback'}
               source={
-                logoUri
+                logoUri && !logoError
                   ? {uri: logoUri}
                   : require('../../assets/images/restaurante.jpeg')
               }

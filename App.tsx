@@ -1,9 +1,10 @@
 // App.tsx
-import React, {useEffect} from 'react';
-import {AppState} from 'react-native';
+import React, {useEffect, useRef} from 'react';
+import {AppState, Linking} from 'react-native';
 import {NavigationContainer} from '@react-navigation/native';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import {initOneSignal} from './src/services/oneSignalService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Token manager
 import {ensureToken} from './src/auth/tokenManager';
@@ -33,6 +34,9 @@ import SelectDefaultHome from './src/screens/SelectDefaultHome';
 //Residence
 
 const Stack = createNativeStackNavigator();
+
+const DEEP_LINK_TOKEN_KEY = 'pending_deep_link_token';
+
 const linking = {
   prefixes: ['tabtrack://'],
   config: {
@@ -42,7 +46,52 @@ const linking = {
   },
 };
 
+function extractTokenFromDeepLink(url: string): string | null {
+  if (!url) return null;
+  // Soporta tanto tabtrack://r/TOKEN como tabtrack://r/TOKEN%20encodedado
+  const match = url.match(/\/r\/([^\/?#]+)/i);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
 export default function App() {
+  const navigationRef = useRef<any>(null);
+
+  const handleDeepLink = async (url: string | null) => {
+    if (!url) return;
+    const token = extractTokenFromDeepLink(url);
+    if (!token) return;
+
+    console.log('[DeepLink] Token recibido:', token);
+
+    // Guardamos el token para que QRScreen lo consuma si la nav no está lista
+    await AsyncStorage.setItem(DEEP_LINK_TOKEN_KEY, token);
+
+    // Si la navegación ya está lista intentamos navegar directo
+    try {
+      if (navigationRef.current?.isReady()) {
+        navigationRef.current.navigate('Home', {
+          screen: 'QR',
+          params: {
+            screen: 'Escanear',
+            params: {token},
+          },
+        });
+        // ✅ Limpiamos inmediatamente después de navegar
+        await AsyncStorage.removeItem(DEEP_LINK_TOKEN_KEY);
+      }
+    } catch (e) {
+      console.warn(
+        '[DeepLink] Error navegando directo, QRScreen lo tomará del storage',
+        e,
+      );
+    }
+  };
+
   useEffect(() => {
     const validateToken = async () => {
       try {
@@ -59,20 +108,35 @@ export default function App() {
     validateToken();
 
     // Cuando la app regresa al frente
-    const subscription = AppState.addEventListener('change', state => {
+    // Deep link cuando la app estaba CERRADA
+    Linking.getInitialURL().then(url => {
+      if (url) {
+        console.log('[DeepLink] Initial URL:', url);
+        handleDeepLink(url);
+      }
+    });
+
+    // Deep link cuando la app está en BACKGROUND
+    const linkingSub = Linking.addEventListener('url', ({url}) => {
+      console.log('[DeepLink] URL recibida en background:', url);
+      handleDeepLink(url);
+    });
+
+    const appStateSub = AppState.addEventListener('change', state => {
       if (state === 'active') {
         validateToken();
       }
     });
 
     return () => {
-      subscription.remove();
+      linkingSub.remove();
+      appStateSub.remove();
     };
   }, []);
+
   return (
-    <NavigationContainer linking={linking}>
-      <Stack.Navigator
-        screenOptions={{headerShown: false, gestureEnabled: false}}>
+    <NavigationContainer linking={linking} ref={navigationRef}>
+      <Stack.Navigator screenOptions={{headerShown: false}}>
         <Stack.Screen name="Splash" component={SplashScreen} />
         <Stack.Screen name="Welcome" component={WelcomeScreen} />
         <Stack.Screen name="CreateAccount" component={CreateAccount} />
@@ -87,10 +151,8 @@ export default function App() {
         <Stack.Screen name="Recent" component={RecentAccounts} />
         <Stack.Screen name="QuickLogin" component={QuickLogin} />
         <Stack.Screen name="SelectDefaultHome" component={SelectDefaultHome} />
-
         <Stack.Screen name="CodeResidence" component={CodeResidence} />
         <Stack.Screen name="SplashResidence" component={SplashResidence} />
-
         <Stack.Screen name="Home" component={Home} />
         <Stack.Screen name="HomeResidence" component={HomeResidence} />
       </Stack.Navigator>

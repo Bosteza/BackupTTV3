@@ -1,4 +1,4 @@
-/* token*/
+/* SIRVE*/
 import React, {useState, useRef, useEffect, useCallback} from 'react';
 import {
   View,
@@ -29,6 +29,7 @@ import {
   useRoute,
 } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
 import {PDFDocument, StandardFonts, rgb} from 'pdf-lib';
 import RNFS from 'react-native-fs';
 import Share from 'react-native-share';
@@ -54,7 +55,7 @@ const MONTH_NAMES = [
 
 export default function ExperiencesScreen() {
   const navigation = useNavigation();
-  const route = useRoute(); // <--- nuevo: detectamos params entrantes
+  const route = useRoute();
   const {width, height} = useWindowDimensions();
 
   const wp = p => (p * width) / 100;
@@ -87,14 +88,12 @@ export default function ExperiencesScreen() {
   const [exporting, setExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState('');
 
-  // --- refs para scroll y posicionamiento (nuevos) ---
   const mainScrollRef = useRef(null);
-  const monthPositionsRef = useRef({}); // { periodo: y }
-  const pendingNotificationRef = useRef(null); // guarda notificacion si llega antes de cargar monthsData
+  const monthPositionsRef = useRef({});
+  const pendingNotificationRef = useRef(null);
 
-  // refs dentro del sheet para cada transacción (nuevos)
   const sheetScrollRef = useRef(null);
-  const txPositionsRef = useRef({}); // { txId: y }
+  const txPositionsRef = useRef({});
 
   useEffect(() => {
     animY.setValue(0);
@@ -155,7 +154,7 @@ export default function ExperiencesScreen() {
         'Content-Type': 'application/json',
         ...(TOKEN ? {Authorization: `Bearer ${TOKEN}`} : {}),
       };
-      // fetch
+
       const res = await fetch(url, {method: 'GET', headers});
       let json = null;
       try {
@@ -204,7 +203,7 @@ export default function ExperiencesScreen() {
           if (idx >= 0) {
             months[idx].billing = p.billing ?? null;
             months[idx].counts = p.counts ?? {closed_count: 0, open_count: 0};
-            // amount debe reflejar el monto usado (0 también es válido)
+
             const monto =
               p.billing &&
               p.billing.monto_mensual_usado !== undefined &&
@@ -218,7 +217,7 @@ export default function ExperiencesScreen() {
           }
         });
       }
-      // --- ADICIONAL: intentar obtener billing DETALLADO (detalle=true) para el mes actual ---
+
       try {
         const currentPeriodo = `${year}${String(now.getMonth() + 1).padStart(
           2,
@@ -244,7 +243,7 @@ export default function ExperiencesScreen() {
             } catch (e) {
               jsonDet = null;
             }
-            // buscar billing en la respuesta detallada
+
             let billingDet = null;
             let countsDet = null;
             if (jsonDet) {
@@ -257,7 +256,7 @@ export default function ExperiencesScreen() {
                 countsDet = jsonDet.periodos[0].counts ?? countsDet;
               }
               if (!billingDet && jsonDet.billing) billingDet = jsonDet.billing;
-              // fallback: buscar cualquier key con 'billing'
+
               if (!billingDet) {
                 for (const k of Object.keys(jsonDet)) {
                   if (k.toLowerCase().includes('billing') && jsonDet[k]) {
@@ -269,7 +268,7 @@ export default function ExperiencesScreen() {
             }
             if (billingDet) {
               months[idxCur].billing = billingDet;
-              // monto usado (0 es válido)
+
               if (
                 billingDet.monto_mensual_usado !== undefined &&
                 billingDet.monto_mensual_usado !== null
@@ -494,6 +493,23 @@ export default function ExperiencesScreen() {
                 c.total_consumo ||
                 0,
             );
+            const propinaRaw =
+              (detail && (detail.monto_propina ?? detail.propina)) ??
+              c.monto_propina ??
+              c.propina;
+            const propinaParsed = Number(propinaRaw);
+            const propinaFinal = Number.isNaN(propinaParsed)
+              ? 0
+              : propinaParsed;
+
+            const totalPagarRaw =
+              (detail && (detail.total_pagar ?? detail.totalPagar)) ??
+              c.total_pagar ??
+              c.totalPagar;
+            const totalPagarParsed = Number(totalPagarRaw);
+            const totalPagarFinal = Number.isNaN(totalPagarParsed)
+              ? total + propinaFinal
+              : totalPagarParsed;
 
             consumptions.push({
               id: c.sale_id ?? `c-${idx}`,
@@ -510,6 +526,8 @@ export default function ExperiencesScreen() {
               initials,
               timestamp,
               amount: total,
+              propina: propinaFinal,
+              total_pagar: totalPagarFinal,
               items,
               raw: c,
               fecha_apertura: fechaA,
@@ -917,6 +935,55 @@ export default function ExperiencesScreen() {
           color: rgb(0.07, 0.07, 0.07),
         });
 
+        y -= 20;
+
+        const propinaVal = Number(tx.propina) || 0;
+        const totalPagarVal =
+          tx.total_pagar !== undefined && tx.total_pagar !== null
+            ? Number(tx.total_pagar)
+            : subtotal + propinaVal;
+
+        if (y < 100) {
+          page = pdfDoc.addPage(pageSize);
+          ({width: pW, height: pH} = page.getSize());
+          y = pH - 60;
+        }
+
+        page.drawText('Propina:', {
+          x: marginLeft + 8,
+          y: y - 6,
+          size: 10,
+          font,
+          color: rgb(0.42, 0.13, 0.66),
+        });
+        const propinaText = `$${fmtCurrency(propinaVal)}`;
+        const propW = font.widthOfTextAtSize(propinaText, 10);
+        page.drawText(propinaText, {
+          x: pW - marginLeft - propW,
+          y: y - 6,
+          size: 10,
+          font,
+          color: rgb(0.07, 0.07, 0.07),
+        });
+        y -= 18;
+
+        page.drawText('Total a pagar:', {
+          x: marginLeft + 8,
+          y: y - 6,
+          size: 10,
+          font,
+          color: rgb(0.42, 0.13, 0.66),
+        });
+        const totalPagarText = `$${fmtCurrency(totalPagarVal)}`;
+        const totalPagarW = font.widthOfTextAtSize(totalPagarText, 10);
+        page.drawText(totalPagarText, {
+          x: pW - marginLeft - totalPagarW,
+          y: y - 6,
+          size: 10,
+          font,
+          color: rgb(0.07, 0.07, 0.07),
+        });
+
         y -= 24;
 
         page.drawLine({
@@ -1069,6 +1136,11 @@ export default function ExperiencesScreen() {
             <Text style={sheetStyles.personMeta}>
               {tx.items.length} artículo{tx.items.length === 1 ? '' : 's'}
             </Text>
+            {tx.restaurant ? (
+              <Text style={{color: '#6b7280', marginTop: 4}}>
+                Restaurante: {tx.restaurant}
+              </Text>
+            ) : null}
 
             {tx.approved_by ? (
               <Text style={{color: '#6b7280', marginTop: 4}}>
@@ -1084,7 +1156,7 @@ export default function ExperiencesScreen() {
 
           <View style={sheetStyles.personRight}>
             <Text style={sheetStyles.personAmount}>
-              {formatMoney(tx.amount, {currencySign: '$'})}
+              {formatMoney(tx.total_pagar, {currencySign: '$'})}
             </Text>
             <Ionicons
               name={expanded ? 'chevron-up' : 'chevron-down'}
@@ -1125,6 +1197,31 @@ export default function ExperiencesScreen() {
               <Text style={sheetStyles.personSummaryLabel}>Subtotal</Text>
               <Text style={sheetStyles.personSummaryValue}>
                 {formatMoney(computedSubtotal, {currencySign: '$'})}
+              </Text>
+            </View>
+            <View style={[sheetStyles.personSummaryRow, {marginTop: 8}]}>
+              <Text style={sheetStyles.personSummaryLabel}>Propina</Text>
+              <Text style={sheetStyles.personSummaryValue}>
+                {formatMoney(tx.propina || 0, {currencySign: '$'})}
+              </Text>
+            </View>
+
+            <View style={[sheetStyles.personSummaryRow, {marginTop: 8}]}>
+              <Text
+                style={[
+                  sheetStyles.personSummaryLabel,
+                  {color: '#000000', fontWeight: '900'},
+                ]}>
+                Total
+              </Text>
+              <Text
+                style={[sheetStyles.personSummaryValue, {color: '#000000'}]}>
+                {formatMoney(
+                  tx.total_pagar !== undefined && tx.total_pagar !== null
+                    ? tx.total_pagar
+                    : computedSubtotal + (tx.propina || 0),
+                  {currencySign: '$'},
+                )}
               </Text>
             </View>
 
